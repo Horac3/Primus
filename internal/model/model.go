@@ -49,9 +49,12 @@ type DynamicValue struct {
 
 // ParamSpec is either a static string or a dynamically generated value.
 // Exactly one of Static or Dynamic should be non-nil.
+// EnumValues captures any enum constraint from the source spec so a UI
+// can render a select; it does not restrict runtime values.
 type ParamSpec struct {
-	Static  *string       `json:"static,omitempty"`
-	Dynamic *DynamicValue `json:"dynamic,omitempty"`
+	Static      *string       `json:"static,omitempty"`
+	Dynamic     *DynamicValue `json:"dynamic,omitempty"`
+	EnumValues  []string      `json:"enum_values,omitempty"`
 }
 
 // RequestDefinition is a reusable template for an HTTP request.
