@@ -105,6 +105,7 @@ type TestConfig struct {
 // RunSummary holds aggregate metrics for a completed run.
 type RunSummary struct {
 	StatusCounts map[int]int `json:"status_counts,omitempty"`
+	ErrorCount   int         `json:"error_count"`
 	P50Millis    int         `json:"p50_millis"`
 	P95Millis    int         `json:"p95_millis"`
 	P99Millis    int         `json:"p99_millis"`
