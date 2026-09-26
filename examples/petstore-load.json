@@ -1,0 +1,13 @@
+{
+  "_comment": "Demo: load-test Petstore findPetsByStatus. Import the spec first via the web UI or with the importer.",
+  "id": "cfg-petstore-demo",
+  "request_id": "findPetsByStatus",
+  "mode": "load",
+  "concurrency": 5,
+  "total_requests": 20,
+  "assertions": {
+    "expected_status": [200],
+    "max_p95_millis": 3000,
+    "max_error_rate": 0.1
+  }
+}
