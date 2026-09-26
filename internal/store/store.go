@@ -161,6 +161,28 @@ func GetRun(db *sql.DB, id string) (model.Run, error) {
 	return r, nil
 }
 
+// ListAllRuns returns every Run regardless of TestConfig ID.
+func ListAllRuns(db *sql.DB) ([]model.Run, error) {
+	rows, err := db.Query(`SELECT payload FROM runs`)
+	if err != nil {
+		return nil, fmt.Errorf("ListAllRuns: %w", err)
+	}
+	defer rows.Close()
+	var out []model.Run
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var r model.Run
+		if err := json.Unmarshal([]byte(payload), &r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ListRuns returns all Runs for a given TestConfig ID.
 func ListRuns(db *sql.DB, testConfigID string) ([]model.Run, error) {
 	rows, err := db.Query(`SELECT payload FROM runs WHERE test_config_id = ?`, testConfigID)

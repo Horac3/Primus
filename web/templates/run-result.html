@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Run {{.Run.ID}} — Primus</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1f2328; }
+  h1   { font-size: 1.4rem; }
+  .badge-pass { background:#d1fae5; color:#065f46; padding:3px 12px; border-radius:4px; font-weight:600; }
+  .badge-fail { background:#fee2e2; color:#991b1b; padding:3px 12px; border-radius:4px; font-weight:600; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; margin-top: 0.5rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f7f8fa; }
+  .section { margin-top: 1.5rem; }
+  h2 { font-size: 1rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3rem; }
+  a { color: #3b82d4; text-decoration: none; }
+  nav { margin-bottom: 1rem; }
+  .muted { color: #57606a; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<nav><a href="/">← Dashboard</a> · <a href="/runs">Run History</a></nav>
+<h1>Run Result</h1>
+<p class="muted">ID: {{.Run.ID}} · Config: {{.Run.TestConfigID}}</p>
+<p class="muted">{{.Run.StartedAt.Format "2006-01-02 15:04:05 UTC"}} → {{.Run.FinishedAt.Format "15:04:05"}}</p>
+
+<p>
+  {{if .Run.Passed}}
+  <span class="badge-pass">✓ PASSED</span>
+  {{else}}
+  <span class="badge-fail">✗ FAILED</span>
+  {{end}}
+</p>
+
+<div class="section">
+<h2>Latency</h2>
+<table>
+  <tr><th>P50</th><td>{{.Run.Summary.P50Millis}} ms</td></tr>
+  <tr><th>P95</th><td>{{.Run.Summary.P95Millis}} ms</td></tr>
+  <tr><th>P99</th><td>{{.Run.Summary.P99Millis}} ms</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>Status Codes</h2>
+<table>
+  <thead><tr><th>Code</th><th>Count</th></tr></thead>
+  <tbody>
+  {{range $code, $count := .Run.Summary.StatusCounts}}
+  <tr><td>{{$code}}</td><td>{{$count}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<div class="section">
+<h2>Error Summary</h2>
+<table>
+  <tr><th>Error count</th><td>{{.Run.Summary.ErrorCount}}</td></tr>
+  <tr><th>Error rate</th><td>{{printf "%.2f%%" (mul .Run.Summary.ErrorRate 100.0)}}</td></tr>
+</table>
+</div>
+
+</body>
+</html>

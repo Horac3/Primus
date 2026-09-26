@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Primus — Dashboard</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #1f2328; }
+  h1   { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  h2   { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3rem; }
+  .card { background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 6px; padding: 1rem; margin: 0.5rem 0; }
+  .badge-pass { background:#d1fae5; color:#065f46; padding:2px 8px; border-radius:4px; font-size:.85rem; }
+  .badge-fail { background:#fee2e2; color:#991b1b; padding:2px 8px; border-radius:4px; font-size:.85rem; }
+  form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end; margin-top: 0.5rem; }
+  input[type=text], input[type=url], input[type=number], select {
+    border: 1px solid #d1d5db; border-radius:4px; padding: 0.35rem 0.5rem; font-size: 0.95rem;
+  }
+  button { background:#3b82d4; color:#fff; border:none; border-radius:4px;
+           padding:0.4rem 1rem; cursor:pointer; font-size:0.95rem; }
+  button:hover { background:#2563eb; }
+  .error { color: #b91c1c; background:#fee2e2; padding: 0.5rem 0.75rem; border-radius:4px; }
+  a { color: #3b82d4; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f7f8fa; }
+  nav { margin-bottom: 1.5rem; display: flex; gap: 1rem; }
+</style>
+</head>
+<body>
+<h1>Primus</h1>
+<nav>
+  <a href="/">Dashboard</a>
+  <a href="/runs">Run History</a>
+</nav>
+
+<h2>Import Spec</h2>
+<form hx-post="/import" hx-target="#request-list" hx-swap="outerHTML" hx-indicator="#import-spinner">
+  <input type="url" name="spec_url" placeholder="https://…/swagger.json" size="50" required>
+  <button type="submit">Import</button>
+  <span id="import-spinner" class="htmx-indicator" style="display:none">⏳</span>
+</form>
+{{if .ImportError}}
+<p class="error">{{.ImportError}}</p>
+{{end}}
+
+<div id="request-list">
+{{template "request-list" .}}
+</div>
+
+</body>
+</html>
