@@ -1,0 +1,12 @@
+﻿# Build artefacts
+bin/
+tmp/
+
+# SQLite databases
+*.db
+
+# Node (should never appear)
+node_modules/
+
+# Hackathon screenshots — not source code
+bob_sessions/

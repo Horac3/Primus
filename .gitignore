@@ -1,0 +1,19 @@
+﻿# Binaries and build output
+bin/
+tmp/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Environment files
+.env
+*.env
+
+# Node (should never appear, but just in case)
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
