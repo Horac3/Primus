@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Run History — Primus</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #1f2328; }
+  h1   { font-size: 1.4rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f7f8fa; }
+  .badge-pass { background:#d1fae5; color:#065f46; padding:2px 8px; border-radius:4px; }
+  .badge-fail { background:#fee2e2; color:#991b1b; padding:2px 8px; border-radius:4px; }
+  a { color: #3b82d4; text-decoration: none; }
+  nav { margin-bottom: 1rem; }
+  .muted { color: #57606a; }
+</style>
+</head>
+<body>
+<nav><a href="/">← Dashboard</a></nav>
+<h1>Run History</h1>
+{{if .Runs}}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th><th>Config</th><th>Started</th>
+      <th>P95 (ms)</th><th>Error Rate</th><th>Result</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Runs}}
+  <tr>
+    <td><a href="/runs/{{.ID}}">{{.ID}}</a></td>
+    <td class="muted">{{.TestConfigID}}</td>
+    <td class="muted">{{.StartedAt.Format "2006-01-02 15:04:05"}}</td>
+    <td>{{.Summary.P95Millis}}</td>
+    <td>{{printf "%.1f%%" (mul .Summary.ErrorRate 100.0)}}</td>
+    <td>
+      {{if .Passed}}<span class="badge-pass">PASS</span>
+      {{else}}<span class="badge-fail">FAIL</span>{{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No runs yet. <a href="/">Import a spec and launch a test.</a></p>
+{{end}}
+</body>
+</html>

@@ -59,7 +59,7 @@ func TestImportHandler_ValidURL_PersistsDefinitions(t *testing.T) {
 	defer specSrv.Close()
 
 	db := newTestDB(t)
-	mux := web.NewServerWithTemplateDir(db, "../../web/templates")
+	mux := web.NewServer(db)
 
 	form := url.Values{"spec_url": {specSrv.URL + "/spec.json"}}
 	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(form.Encode()))
@@ -90,7 +90,7 @@ func TestImportHandler_ValidURL_PersistsDefinitions(t *testing.T) {
 func TestImportHandler_MalformedURL_Returns4xx(t *testing.T) {
 	// Arrange
 	db := newTestDB(t)
-	mux := web.NewServerWithTemplateDir(db, "../../web/templates")
+	mux := web.NewServer(db)
 
 	form := url.Values{"spec_url": {"not-a-valid-url-%%"}}
 	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(form.Encode()))
@@ -132,7 +132,7 @@ func TestRunsHandler_ValidConfig_PersistsRun(t *testing.T) {
 		t.Fatalf("SaveRequestDefinition: %v", err)
 	}
 
-	mux := web.NewServerWithTemplateDir(db, "../../web/templates")
+	mux := web.NewServer(db)
 
 	form := url.Values{
 		"request_id":      {"req-web-1"},
@@ -172,7 +172,7 @@ func TestRunsHandler_ValidConfig_PersistsRun(t *testing.T) {
 func TestGetRunHandler_UnknownID_Returns404(t *testing.T) {
 	// Arrange
 	db := newTestDB(t)
-	mux := web.NewServerWithTemplateDir(db, "../../web/templates")
+	mux := web.NewServer(db)
 
 	req := httptest.NewRequest(http.MethodGet, "/runs/does-not-exist", nil)
 	rr := httptest.NewRecorder()
@@ -202,7 +202,7 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 		t.Fatalf("SaveRun: %v", err)
 	}
 
-	mux := web.NewServerWithTemplateDir(db, "../../web/templates")
+	mux := web.NewServer(db)
 	req := httptest.NewRequest(http.MethodGet, "/runs/run-known", nil)
 	rr := httptest.NewRecorder()
 

@@ -1,0 +1,22 @@
+﻿# Version control
+.git/
+.gitignore
+
+# Hackathon session screenshots
+bob_sessions/
+
+# Agent instructions (not needed in build context)
+agent_instructions/
+
+# Local build output
+bin/
+tmp/
+
+# Databases (data lives in the volume, not the image)
+*.db
+*.db-shm
+*.db-wal
+
+# OS noise
+.DS_Store
+Thumbs.db

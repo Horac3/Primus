@@ -3,9 +3,10 @@ package web
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"embed"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"strconv"
@@ -18,42 +19,49 @@ import (
 	"github.com/Horac3/Primus/internal/store"
 )
 
+//go:embed templates static
+var embeddedFS embed.FS
+
 // templateFuncs are helpers available inside every template.
 var templateFuncs = template.FuncMap{
 	"mul": func(a, b float64) float64 { return a * b },
 }
 
-// LoadTemplates parses all HTML templates from the given directory path.
-// Pass "web/templates" when running from the module root.
-func LoadTemplates(dir string) (*template.Template, error) {
-	tmpl := template.New("").Funcs(templateFuncs)
-	tmpl, err := tmpl.ParseGlob(dir + "/*.html")
-	if err != nil {
-		return nil, err
-	}
-	return tmpl, nil
+// loadEmbeddedTemplates parses all HTML templates from the embedded FS.
+func loadEmbeddedTemplates() *template.Template {
+	tmpl := template.Must(
+		template.New("").Funcs(templateFuncs).ParseFS(embeddedFS, "templates/*.html"),
+	)
+	return tmpl
 }
 
-// NewServer wires all routes and returns a ready-to-serve *http.ServeMux.
-// templateDir is the path to the web/templates directory (e.g. "web/templates").
+// NewServer wires all routes using the embedded templates and static assets.
 func NewServer(db *sql.DB) *http.ServeMux {
-	return NewServerWithTemplateDir(db, "web/templates")
+	return newServerWithTemplates(db, loadEmbeddedTemplates())
 }
 
-// NewServerWithTemplateDir allows tests to override the template directory.
+// NewServerWithTemplateDir loads templates from disk — used in tests so the
+// test process can find templates relative to its own working directory.
 func NewServerWithTemplateDir(db *sql.DB, templateDir string) *http.ServeMux {
-	tmpl, err := LoadTemplates(templateDir)
+	tmpl := template.New("").Funcs(templateFuncs)
+	tmpl, err := tmpl.ParseGlob(templateDir + "/*.html")
 	if err != nil {
-		// Fall back to an empty template set so the server still starts;
-		// handlers will log render errors but won't panic.
 		log.Printf("web: load templates from %q: %v", templateDir, err)
 		tmpl = template.New("").Funcs(templateFuncs)
 	}
+	return newServerWithTemplates(db, tmpl)
+}
+
+func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
-		http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))).ServeHTTP(w, r)
-	})
+	// Serve static files from the embedded FS.
+	staticFS, err := fs.Sub(embeddedFS, "static")
+	if err != nil {
+		log.Printf("web: sub static FS: %v", err)
+	} else {
+		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	}
 
 	mux.HandleFunc("GET /{$}", dashboardHandler(db, tmpl))
 	mux.HandleFunc("POST /import", importHandler(db, tmpl))
@@ -302,4 +310,3 @@ func renderTemplate(w http.ResponseWriter, tmpl *template.Template, name string,
 }
 
 // sentinel so the package compiles even if embed path needs adjusting
-var _ = errors.New

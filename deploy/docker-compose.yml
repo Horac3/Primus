@@ -1,0 +1,14 @@
+services:
+  primus:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: primus:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - primus-data:/data
+    restart: unless-stopped
+
+volumes:
+  primus-data:
