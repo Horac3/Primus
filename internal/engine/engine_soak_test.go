@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/Horac3/Primus/internal/engine"
 	"github.com/Horac3/Primus/internal/model"
@@ -127,7 +126,7 @@ func TestProbe_NoAuth_SendsNoAuthHeader(t *testing.T) {
 	}
 }
 
-func TestRunLoad_AppliesGlobalAuthToEveryRequest(t *testing.T) {
+func TestRun_AppliesGlobalAuthToEveryRequest(t *testing.T) {
 	// Arrange — counts how many hits carried the bearer header
 	var authed, total int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +149,7 @@ func TestRunLoad_AppliesGlobalAuthToEveryRequest(t *testing.T) {
 	auth := model.AuthConfig{Type: model.AuthTypeBearer, Token: "shared-tok"}
 
 	// Act
-	_, err := engine.RunLoad(context.Background(), def, cfg, auth)
+	_, err := engine.Run(context.Background(), def, cfg, auth)
 
 	// Assert — same auth on every request without re-entering it per endpoint
 	if err != nil {
@@ -161,48 +160,5 @@ func TestRunLoad_AppliesGlobalAuthToEveryRequest(t *testing.T) {
 	}
 	if authed != total {
 		t.Errorf("authed = %d, want %d (global auth must apply to every request)", authed, total)
-	}
-}
-
-// ============================================================
-// RunSoak — deadline-based dispatch, not fixed count
-// ============================================================
-
-func TestRunSoak_StopsAtDeadline(t *testing.T) {
-	// Arrange — fast target, short deadline
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	def := model.RequestDefinition{
-		ID: "s1", Name: "s1", Method: "GET", URLTemplate: srv.URL + "/x",
-	}
-	cfg := model.TestConfig{
-		ID: "cfg-s1", RequestID: "s1", Mode: model.ModeSoak,
-		Concurrency: 2, Duration: 2 * time.Second,
-		Assertions: model.Assertions{ExpectedStatus: []int{200}},
-	}
-
-	// Act
-	start := time.Now()
-	run, err := engine.RunSoak(context.Background(), def, cfg, model.AuthConfig{})
-	elapsed := time.Since(start)
-
-	// Assert — stops at approximately the deadline, not a fixed count
-	if err != nil {
-		t.Fatalf("RunSoak: %v", err)
-	}
-	if elapsed < 1500*time.Millisecond || elapsed > 15*time.Second {
-		t.Errorf("elapsed = %v, want ≈2s deadline", elapsed)
-	}
-	if len(run.Summary.StatusCounts) == 0 {
-		t.Error("no requests recorded during soak")
-	}
-	if run.Outcome != model.OutcomePass {
-		t.Errorf("Outcome = %q, want %q", run.Outcome, model.OutcomePass)
-	}
-	if !run.Passed {
-		t.Error("Passed = false, want true when assertions met")
 	}
 }

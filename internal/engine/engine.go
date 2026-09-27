@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,96 @@ func percentileIdx(n, pct int) int {
 		idx = n - 1
 	}
 	return idx
+}
+
+// ============================================================
+// Public helper: ValidateTestConfig
+// ============================================================
+
+// ValidateTestConfig rejects configs that set both or neither of the two
+// mutually exclusive stop conditions (TotalRequests vs Duration), and
+// non-positive concurrency. Callers must validate before running.
+func ValidateTestConfig(cfg model.TestConfig) error {
+	if cfg.Concurrency < 1 {
+		return fmt.Errorf("concurrency must be >= 1 (got %d)", cfg.Concurrency)
+	}
+	countSet := cfg.TotalRequests > 0
+	durSet := cfg.Duration > 0
+	if countSet == durSet {
+		return fmt.Errorf("set exactly one of total_requests (%d) or duration (%s), not both/neither",
+			cfg.TotalRequests, cfg.Duration)
+	}
+	return nil
+}
+
+// ============================================================
+// Public helper: CheckAssertions
+// ============================================================
+
+// CheckAssertions returns one AssertionResult per configured assertion.
+// Entries mirror EvaluateAssertions item-by-item; the overall pass/fail
+// (including the 100%-failure baseline) stays with DetermineOutcome.
+func CheckAssertions(a model.Assertions, s model.RunSummary) []model.AssertionResult {
+	var out []model.AssertionResult
+	if len(a.ExpectedStatus) > 0 {
+		allowed := make(map[int]bool, len(a.ExpectedStatus))
+		for _, code := range a.ExpectedStatus {
+			allowed[code] = true
+		}
+		passed := len(s.StatusCounts) > 0
+		for code := range s.StatusCounts {
+			if !allowed[code] {
+				passed = false
+				break
+			}
+		}
+		names := make([]string, 0, len(a.ExpectedStatus))
+		for _, code := range a.ExpectedStatus {
+			names = append(names, strconv.Itoa(code))
+		}
+		out = append(out, model.AssertionResult{
+			Name:   "Status code: " + strings.Join(names, ", "),
+			Passed: passed,
+		})
+	}
+	if a.MaxP95Millis > 0 {
+		out = append(out, model.AssertionResult{
+			Name:   fmt.Sprintf("Latency (p95) < %dms", a.MaxP95Millis),
+			Passed: !(s.P95Millis > a.MaxP95Millis),
+		})
+	}
+	if a.MaxErrorRate > 0 {
+		out = append(out, model.AssertionResult{
+			Name:   "Error rate < " + strconv.FormatFloat(a.MaxErrorRate*100, 'f', -1, 64) + "%",
+			Passed: !(s.ErrorRate > a.MaxErrorRate),
+		})
+	}
+	return out
+}
+
+// ============================================================
+// Public helper: Bucketize
+// ============================================================
+
+// Bucketize counts samples into the fixed model.LatencyBucketEdges buckets
+// plus a final >= last-edge overflow bucket. Counts sum to len(samples).
+func Bucketize(samples []int) []int {
+	edges := model.LatencyBucketEdges
+	buckets := make([]int, len(edges)+1)
+	for _, s := range samples {
+		placed := false
+		for i, e := range edges {
+			if s < e {
+				buckets[i]++
+				placed = true
+				break
+			}
+		}
+		if !placed {
+			buckets[len(buckets)-1]++
+		}
+	}
+	return buckets
 }
 
 // ============================================================
@@ -212,58 +303,38 @@ func randomString(n int) string {
 // Internal: job feeder and worker pool
 // ============================================================
 
-// feedJobs sends totalRequests job tokens onto jobs, then closes it.
+// stopPredicate reports whether the run is complete: duration-based when
+// cfg.Duration > 0, count-based otherwise (exactly one is always set —
+/// see ValidateTestConfig).
+func stopPredicate(cfg model.TestConfig, start time.Time, sent int) bool {
+	if cfg.Duration > 0 {
+		return time.Since(start) >= cfg.Duration
+	}
+	return sent >= cfg.TotalRequests
+}
+
+// feed sends job tokens until the stop predicate holds, then closes the
+// channel. When a BurstPattern is set, jobs are released in pulses of
+// Count with Idle ms between them; otherwise as fast as workers drain.
 // Respects ctx cancellation.
-func feedJobs(ctx context.Context, jobs chan<- struct{}, total int) {
+func feed(ctx context.Context, jobs chan<- struct{}, cfg model.TestConfig, start time.Time) {
 	defer close(jobs)
-	for i := 0; i < total; i++ {
+	sent := 0
+	for !stopPredicate(cfg, start, sent) {
 		select {
 		case <-ctx.Done():
 			return
 		case jobs <- struct{}{}:
+			sent++
 		}
-	}
-}
-
-// feedBurst sends jobs in pulses of burstCount with idleMs sleep between them.
-func feedBurst(ctx context.Context, jobs chan<- struct{}, total, burstCount, idleMs int) {
-	defer close(jobs)
-	sent := 0
-	for sent < total {
-		// Send one burst
-		batchSize := burstCount
-		if sent+batchSize > total {
-			batchSize = total - sent
-		}
-		for i := 0; i < batchSize; i++ {
+		// Burst pacing: idle between pulses, never after the final one.
+		if cfg.BurstPattern != nil && cfg.BurstPattern.Count > 0 &&
+			sent%cfg.BurstPattern.Count == 0 && !stopPredicate(cfg, start, sent) {
 			select {
 			case <-ctx.Done():
 				return
-			case jobs <- struct{}{}:
-				sent++
+			case <-time.After(time.Duration(cfg.BurstPattern.Idle) * time.Millisecond):
 			}
-		}
-		if sent >= total {
-			break
-		}
-		// Idle between bursts
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(time.Duration(idleMs) * time.Millisecond):
-		}
-	}
-}
-
-// feedSoak sends job tokens continuously until ctx expires, then closes
-// the channel. Used by RunSoak for deadline-based dispatch.
-func feedSoak(ctx context.Context, jobs chan<- struct{}) {
-	defer close(jobs)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case jobs <- struct{}{}:
 		}
 	}
 }
@@ -357,8 +428,10 @@ func execRequest(ctx context.Context, client *http.Client, def model.RequestDefi
 	return result{statusCode: resp.StatusCode, latency: latency}
 }
 
-// aggregate consumes all results and builds a RunSummary.
-func aggregate(results <-chan result, assertions model.Assertions, start time.Time) model.RunSummary {
+// aggregate consumes all results and builds a RunSummary plus the latency
+// bucket histogram. Buckets cover completed responses; transport errors
+// have no latency sample.
+func aggregate(results <-chan result, assertions model.Assertions, start time.Time) (model.RunSummary, []int) {
 	statusCounts := make(map[int]int)
 	var latencies []int
 	var errorCount int
@@ -397,86 +470,58 @@ func aggregate(results <-chan result, assertions model.Assertions, start time.Ti
 		P95Millis:    p95,
 		P99Millis:    p99,
 		ErrorRate:    errorRate,
-	}
+	}, Bucketize(latencies)
 }
 
 // buildRun assembles the final Run from a summary.
-func buildRun(cfg model.TestConfig, summary model.RunSummary, startedAt, finishedAt time.Time) model.Run {
+func buildRun(cfg model.TestConfig, summary model.RunSummary, checks []model.AssertionResult, buckets []int, startedAt, finishedAt time.Time) model.Run {
 	outcome := DetermineOutcome(cfg.Assertions, summary)
 	return model.Run{
-		ID:           fmt.Sprintf("run-%d", startedAt.UnixNano()),
-		TestConfigID: cfg.ID,
-		StartedAt:    startedAt,
-		FinishedAt:   finishedAt,
-		Summary:      summary,
-		Outcome:      outcome,
-		Passed:       outcome == model.OutcomePass,
+		ID:               fmt.Sprintf("run-%d", startedAt.UnixNano()),
+		TestConfigID:     cfg.ID,
+		StartedAt:        startedAt,
+		FinishedAt:       finishedAt,
+		Summary:          summary,
+		Outcome:          outcome,
+		Passed:           outcome == model.OutcomePass,
+		AssertionResults: checks,
+		LatencyBuckets:   buckets,
 	}
 }
 
 // ============================================================
-// RunLoad
+// Run — unified dispatch for every mode
 // ============================================================
 
-// RunLoad executes a load test: cfg.Concurrency workers drain cfg.TotalRequests
-// jobs as fast as possible, then returns the aggregated Run.
-func RunLoad(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
-	client := newClient(cfg.Concurrency)
-	jobs := make(chan struct{}, cfg.Concurrency)
-	results := make(chan result, cfg.Concurrency)
-
-	startedAt := time.Now()
-	go feedJobs(ctx, jobs, cfg.TotalRequests)
-	runWorkers(ctx, req, auth, jobs, results, cfg.Concurrency, client)
-
-	summary := aggregate(results, cfg.Assertions, startedAt)
-	finishedAt := time.Now()
-	return buildRun(cfg, summary, startedAt, finishedAt), nil
-}
-
-// ============================================================
-// RunBurst
-// ============================================================
-
-// RunBurst executes a burst test: jobs are released in pulses per
-// cfg.BurstPattern.Count with cfg.BurstPattern.Idle ms between bursts.
-func RunBurst(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
-	if cfg.BurstPattern == nil {
-		return RunLoad(ctx, req, cfg, auth)
+// Run executes a test: cfg.Concurrency workers drain jobs until the stop
+// predicate holds — a fixed TotalRequests count, or a Duration deadline
+// (exactly one must be set; see ValidateTestConfig). Burst pacing applies
+// when cfg.BurstPattern is set. Returns the aggregated Run.
+func Run(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
+	if err := ValidateTestConfig(cfg); err != nil {
+		return model.Run{}, err
 	}
+
+	runCtx := ctx
+	if cfg.Duration > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithDeadline(ctx, time.Now().Add(cfg.Duration))
+		defer cancel()
+	}
+
 	client := newClient(cfg.Concurrency)
-	jobs := make(chan struct{}, cfg.BurstPattern.Count)
+	buf := cfg.Concurrency
+	if cfg.BurstPattern != nil && cfg.BurstPattern.Count > buf {
+		buf = cfg.BurstPattern.Count
+	}
+	jobs := make(chan struct{}, buf)
 	results := make(chan result, cfg.Concurrency)
 
 	startedAt := time.Now()
-	go feedBurst(ctx, jobs, cfg.TotalRequests, cfg.BurstPattern.Count, cfg.BurstPattern.Idle)
-	runWorkers(ctx, req, auth, jobs, results, cfg.Concurrency, client)
+	go feed(runCtx, jobs, cfg, startedAt)
+	runWorkers(runCtx, req, auth, jobs, results, cfg.Concurrency, client)
 
-	summary := aggregate(results, cfg.Assertions, startedAt)
+	summary, buckets := aggregate(results, cfg.Assertions, startedAt)
 	finishedAt := time.Now()
-	return buildRun(cfg, summary, startedAt, finishedAt), nil
-}
-
-// ============================================================
-// RunSoak
-// ============================================================
-
-// RunSoak executes a soak test: cfg.Concurrency workers fire requests
-// continuously until cfg.Duration elapses, then returns the aggregated Run.
-// Unlike RunLoad/RunBurst it is bounded by a deadline, not a fixed count.
-func RunSoak(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
-	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(cfg.Duration))
-	defer cancel()
-
-	client := newClient(cfg.Concurrency)
-	jobs := make(chan struct{}, cfg.Concurrency)
-	results := make(chan result, cfg.Concurrency)
-
-	startedAt := time.Now()
-	go feedSoak(deadlineCtx, jobs)
-	runWorkers(deadlineCtx, req, auth, jobs, results, cfg.Concurrency, client)
-
-	summary := aggregate(results, cfg.Assertions, startedAt)
-	finishedAt := time.Now()
-	return buildRun(cfg, summary, startedAt, finishedAt), nil
+	return buildRun(cfg, summary, CheckAssertions(cfg.Assertions, summary), buckets, startedAt, finishedAt), nil
 }

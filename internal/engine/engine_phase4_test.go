@@ -204,7 +204,7 @@ func TestRunLoad_AllFailed_OutcomeIsFailNoRequests(t *testing.T) {
 	}
 
 	// Act
-	run, err := engine.RunLoad(context.Background(), def, cfg, model.AuthConfig{})
+	run, err := engine.Run(context.Background(), def, cfg, model.AuthConfig{})
 
 	// Assert
 	if err != nil {
@@ -239,7 +239,7 @@ func TestRunLoad_ZeroAssertions_OutcomeIsNoAssertions(t *testing.T) {
 	}
 
 	// Act
-	run, err := engine.RunLoad(context.Background(), def, cfg, model.AuthConfig{})
+	run, err := engine.Run(context.Background(), def, cfg, model.AuthConfig{})
 
 	// Assert
 	if err != nil {

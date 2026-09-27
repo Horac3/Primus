@@ -34,6 +34,10 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		fmt.Fprintf(os.Stderr, "primus run: parse config %q: %v\n", cfgPath, err)
 		return 2
 	}
+	if err := engine.ValidateTestConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "primus run: invalid config: %v\n", err)
+		return 2
+	}
 
 	// Load the RequestDefinition from the store.
 	reqDef, err := store.GetRequestDefinition(db, cfg.RequestID)
@@ -50,15 +54,8 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 	}
 
 	// Execute the run using the same engine as the web handler.
-	var run model.Run
-	switch cfg.Mode {
-	case model.ModeBurst:
-		run, err = engine.RunBurst(ctx, reqDef, cfg, auth)
-	case model.ModeSoak:
-		run, err = engine.RunSoak(ctx, reqDef, cfg, auth)
-	default:
-		run, err = engine.RunLoad(ctx, reqDef, cfg, auth)
-	}
+	// CLI stays synchronous: it calls engine.Run directly and waits.
+	run, err := engine.Run(ctx, reqDef, cfg, auth)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "primus run: engine error: %v\n", err)
 		return 2

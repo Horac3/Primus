@@ -100,6 +100,56 @@ func TestProbeHandler_UnreachableTarget_Returns2xxWithFailureState(t *testing.T)
 }
 
 // ============================================================
+// Async runs helpers
+// ============================================================
+
+// postRuns submits a run form, expects 202 + a running fragment, and
+// returns the registry run id from data-run-id.
+func postRuns(t *testing.T, mux http.Handler, form url.Values) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("POST /runs status = %d, want 202; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	const marker = `data-run-id="`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("running fragment missing data-run-id; body: %s", body)
+	}
+	rest := body[i+len(marker):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		t.Fatalf("malformed data-run-id; body: %s", body)
+	}
+	return rest[:j]
+}
+
+// pollDone polls GET /runs/status/{id} until the result fragment renders.
+func pollDone(t *testing.T, mux http.Handler, id string) string {
+	t.Helper()
+	var body string
+	for i := 0; i < 100; i++ {
+		time.Sleep(50 * time.Millisecond)
+		req := httptest.NewRequest(http.MethodGet, "/runs/status/"+id, nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code == http.StatusNotFound {
+			continue
+		}
+		body = rr.Body.String()
+		if strings.Contains(body, "badge-") {
+			return body
+		}
+	}
+	t.Fatalf("run %s never finished; last body: %s", id, body)
+	return ""
+}
+
+// ============================================================
 // POST /runs — 100% failing requests + zero assertions → Passed=false
 // ============================================================
 
@@ -121,18 +171,12 @@ func TestRunsHandler_AllFailed_ZeroAssertions_RunPassedFalse(t *testing.T) {
 		"total_requests": {"4"},
 		// no expected_status, no assertions
 	}
-	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
 
-	// Act
-	mux.ServeHTTP(rr, req)
+	// Act — start async, poll to completion
+	id := postRuns(t, mux, form)
+	pollDone(t, mux, id)
 
-	// Assert — non-server-error response
-	if rr.Code >= 500 {
-		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
-	}
-	// Retrieve persisted run and check Passed=false and OutcomeFailNoRequests
+	// Assert — persisted run is never a green PASS
 	runs, err := store.ListAllRuns(db)
 	if err != nil {
 		t.Fatalf("ListAllRuns: %v", err)
@@ -144,8 +188,6 @@ func TestRunsHandler_AllFailed_ZeroAssertions_RunPassedFalse(t *testing.T) {
 	if r.Passed {
 		t.Errorf("Passed = true, want false (no assertions configured = never a green PASS)")
 	}
-	// With no assertions and valid HTTP responses (even 500s), outcome is NoAssertions (neutral).
-	// OutcomeFail/FailNoRequests only triggers on transport errors or configured assertion failures.
 	if r.Outcome == model.OutcomePass {
 		t.Errorf("Outcome = %q, want anything but Pass when no assertions configured", r.Outcome)
 	}
@@ -172,17 +214,12 @@ func TestRunsHandler_ZeroAssertions_SomeSuccess_OutcomeNoAssertions(t *testing.T
 		"concurrency":    {"2"},
 		"total_requests": {"4"},
 	}
-	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
 
 	// Act
-	mux.ServeHTTP(rr, req)
+	id := postRuns(t, mux, form)
+	pollDone(t, mux, id)
 
 	// Assert
-	if rr.Code >= 500 {
-		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
-	}
 	runs, _ := store.ListAllRuns(db)
 	if len(runs) == 0 {
 		t.Fatal("no runs persisted")
@@ -197,7 +234,7 @@ func TestRunsHandler_ZeroAssertions_SomeSuccess_OutcomeNoAssertions(t *testing.T
 }
 
 // ============================================================
-// POST /runs — configured assertions met → OutcomePass
+// POST /runs — configured assertions met → OutcomePass + checklist
 // ============================================================
 
 func TestRunsHandler_AssertionsMet_OutcomePass(t *testing.T) {
@@ -218,16 +255,14 @@ func TestRunsHandler_AssertionsMet_OutcomePass(t *testing.T) {
 		"total_requests":  {"4"},
 		"expected_status": {"200"},
 	}
-	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
 
 	// Act
-	mux.ServeHTTP(rr, req)
+	id := postRuns(t, mux, form)
+	body := pollDone(t, mux, id)
 
-	// Assert
-	if rr.Code >= 500 {
-		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	// Assert — result fragment carries the per-assertion checklist
+	if !strings.Contains(body, "Status code: 200") {
+		t.Errorf("result missing assertion checklist; body: %s", body)
 	}
 	runs, _ := store.ListAllRuns(db)
 	if len(runs) == 0 {
@@ -239,6 +274,134 @@ func TestRunsHandler_AssertionsMet_OutcomePass(t *testing.T) {
 	}
 	if !r.Passed {
 		t.Errorf("Passed = false, want true when assertions met")
+	}
+	if len(r.AssertionResults) != 1 || !r.AssertionResults[0].Passed {
+		t.Errorf("AssertionResults = %+v, want one passing entry", r.AssertionResults)
+	}
+}
+
+// ============================================================
+// POST /runs — soak mode dispatches a deadline run, persists it
+// ============================================================
+
+func TestRunsHandler_SoakMode_PersistsRun(t *testing.T) {
+	// Arrange
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":          {"GET"},
+		"url":             {targetSrv.URL + "/soak"},
+		"mode":            {"soak"},
+		"concurrency":     {"2"},
+		"soak_seconds":    {"1"},
+		"expected_status": {"200"},
+	}
+
+	// Act
+	id := postRuns(t, mux, form)
+	pollDone(t, mux, id)
+
+	// Assert
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	if runs[0].Outcome != model.OutcomePass || !runs[0].Passed {
+		t.Errorf("Outcome = %q Passed = %v, want pass/true", runs[0].Outcome, runs[0].Passed)
+	}
+	if len(runs[0].Summary.StatusCounts) == 0 {
+		t.Error("soak run recorded no requests")
+	}
+}
+
+// ============================================================
+// POST /runs/{id}/stop — cancels mid-run, partial result persists
+// ============================================================
+
+func TestRunsHandler_Stop_CancelsMidRun(t *testing.T) {
+	// Arrange — slow target so the run outlives the test's stop call
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":          {"GET"},
+		"url":             {targetSrv.URL + "/slow"},
+		"mode":            {"load"},
+		"concurrency":     {"1"},
+		"total_requests":  {"20"},
+		"expected_status": {"200"},
+	}
+
+	// Act — start, stop promptly, poll to the (partial) finish
+	id := postRuns(t, mux, form)
+	stopReq := httptest.NewRequest(http.MethodPost, "/runs/"+id+"/stop", nil)
+	stopRR := httptest.NewRecorder()
+	mux.ServeHTTP(stopRR, stopReq)
+	if stopRR.Code != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200; body: %s", stopRR.Code, stopRR.Body.String())
+	}
+	pollDone(t, mux, id)
+
+	// Assert — partial result persisted, far short of the 20 requested
+	runs, _ := store.ListAllRuns(db)
+	if len(runs) == 0 {
+		t.Fatal("no runs persisted")
+	}
+	total := 0
+	for _, c := range runs[0].Summary.StatusCounts {
+		total += c
+	}
+	total += runs[0].Summary.ErrorCount
+	if total >= 20 {
+		t.Errorf("recorded = %d, want partial (< 20) after Stop", total)
+	}
+}
+
+// ============================================================
+// POST /runs — invalid soak duration → 400, nothing started
+// ============================================================
+
+func TestRunsHandler_InvalidSoakDuration_Returns400(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":       {"GET"},
+		"url":          {"http://x.invalid/"},
+		"mode":         {"soak"},
+		"concurrency":  {"1"},
+		"soak_seconds": {"0"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+	runs, _ := store.ListAllRuns(db)
+	if len(runs) != 0 {
+		t.Errorf("runs = %d, want 0 (invalid config must not start)", len(runs))
 	}
 }
 
@@ -515,54 +678,6 @@ func TestProbeHandler_UsesGlobalAuthAutomatically(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "200") {
 		t.Errorf("probe did not authenticate (want 200); body: %s", rr.Body.String())
-	}
-}
-
-// ============================================================
-// POST /runs — soak mode dispatches RunSoak, persists the run
-// ============================================================
-
-func TestRunsHandler_SoakMode_PersistsRun(t *testing.T) {
-	// Arrange
-	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer targetSrv.Close()
-
-	db := newTestDB(t)
-	mux := web.NewServer(db)
-
-	form := url.Values{
-		"method":       {"GET"},
-		"url":          {targetSrv.URL + "/soak"},
-		"mode":         {"soak"},
-		"concurrency":  {"2"},
-		"soak_seconds": {"1"},
-		"expected_status": {"200"},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
-
-	// Act
-	mux.ServeHTTP(rr, req)
-
-	// Assert
-	if rr.Code >= 500 {
-		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
-	}
-	runs, err := store.ListAllRuns(db)
-	if err != nil {
-		t.Fatalf("ListAllRuns: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("runs = %d, want 1", len(runs))
-	}
-	if runs[0].Outcome != model.OutcomePass || !runs[0].Passed {
-		t.Errorf("Outcome = %q Passed = %v, want pass/true", runs[0].Outcome, runs[0].Passed)
-	}
-	if len(runs[0].Summary.StatusCounts) == 0 {
-		t.Error("soak run recorded no requests")
 	}
 }
 

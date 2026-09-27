@@ -189,6 +189,33 @@ func TestRunCmd_SoakMode_RunsUntilDuration(t *testing.T) {
 }
 
 // ============================================================
+// Exit 2 — both stop conditions set (mutually exclusive)
+// ============================================================
+
+func TestRunCmd_BothStopConditions_ExitsTwo(t *testing.T) {
+	// Arrange — TotalRequests AND Duration set
+	db := newTestDB(t)
+	cfg := model.TestConfig{
+		ID:            "cfg-cli-both",
+		RequestID:     "req-cli-both",
+		Mode:          model.ModeLoad,
+		Concurrency:   1,
+		TotalRequests: 5,
+		Duration:      5 * time.Second,
+	}
+	cfgPath := writeConfigFile(t, cfg)
+	var out bytes.Buffer
+
+	// Act
+	code := runCmd(context.Background(), []string{cfgPath}, &out, db)
+
+	// Assert — usage/config error, nothing ran
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2; output: %s", code, out.String())
+	}
+}
+
+// ============================================================
 // Exit 2 — missing config file
 // ============================================================
 

@@ -136,13 +136,28 @@ const (
 	OutcomeNoAssertions RunOutcome = "no_assertions"
 )
 
+// AssertionResult is one configured assertion and whether it held.
+// The UI renders one checklist row per entry; overall Run.Passed is true
+// only if every entry passed (plus the zero-success baseline rule).
+type AssertionResult struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+}
+
+// LatencyBucketEdges are the fixed upper-bound edges (ms) for latency
+// histograms. LatencyBuckets has len(edges)+1 entries: one per edge plus
+// a final >= last-edge overflow bucket.
+var LatencyBucketEdges = []int{50, 100, 150, 200, 300, 400, 500, 600}
+
 // Run is a single execution of a TestConfig.
 type Run struct {
-	ID           string     `json:"id"`
-	TestConfigID string     `json:"test_config_id"`
-	StartedAt    time.Time  `json:"started_at"`
-	FinishedAt   time.Time  `json:"finished_at"`
-	Summary      RunSummary `json:"summary"`
-	Outcome      RunOutcome `json:"outcome"`
-	Passed       bool       `json:"passed"`
+	ID               string            `json:"id"`
+	TestConfigID     string            `json:"test_config_id"`
+	StartedAt        time.Time         `json:"started_at"`
+	FinishedAt       time.Time         `json:"finished_at"`
+	Summary          RunSummary        `json:"summary"`
+	Outcome          RunOutcome        `json:"outcome"`
+	Passed           bool              `json:"passed"`
+	AssertionResults []AssertionResult `json:"assertion_results,omitempty"`
+	LatencyBuckets   []int             `json:"latency_buckets,omitempty"`
 }

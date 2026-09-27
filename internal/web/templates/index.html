@@ -84,6 +84,8 @@ function toggleMode() {
   const soak = m === 'soak';
   document.getElementById('total-req-label').style.display = soak ? 'none' : '';
   document.getElementById('soak-dur-label').style.display  = soak ? '' : 'none';
+  document.querySelector('#total-req-label input').disabled = soak;
+  document.querySelector('#soak-dur-label input').disabled  = !soak;
 }
 </script>
 </body>

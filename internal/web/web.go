@@ -73,6 +73,20 @@ var templateFuncs = template.FuncMap{
 			return "Not set"
 		}
 	},
+	"bucketLabel": func(i int) string {
+		edges := model.LatencyBucketEdges
+		if i < 0 || i > len(edges) {
+			return "?"
+		}
+		if i == len(edges) {
+			return "≥" + strconv.Itoa(edges[len(edges)-1])
+		}
+		lo := 0
+		if i > 0 {
+			lo = edges[i-1]
+		}
+		return strconv.Itoa(lo) + "–" + strconv.Itoa(edges[i]-1)
+	},
 }
 
 // loadEmbeddedTemplates parses all HTML templates from the embedded FS.
@@ -109,6 +123,10 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	}
 
+	// Async run registry: finished runs persist to SQLite, in-flight ones
+	// live here for polling + Stop.
+	reg := NewRegistry(func(r model.Run) error { return store.SaveRun(db, r) })
+
 	mux.HandleFunc("GET /{$}", indexHandler(db, tmpl))
 	mux.HandleFunc("POST /auth", authHandler(db, tmpl))
 	mux.HandleFunc("GET /auth-fragment", authFragmentHandler(db, tmpl))
@@ -116,7 +134,9 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("GET /requests/{id}", requestPanelHandler(db, tmpl))
 	mux.HandleFunc("POST /import", importHandler(db, tmpl))
 	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
-	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl))
+	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg))
+	mux.HandleFunc("GET /runs/status/{id}", runStatusHandler(tmpl, reg))
+	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(tmpl, reg))
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
 	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl))
 
@@ -306,9 +326,14 @@ func probeHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 	}
 }
 
-// ---- POST /runs — inline fragment ------------------------------------------
+// ---- POST /runs — start async, return the running fragment ---------------
 
-func postRunHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+type runningData struct {
+	RunID  string
+	Detail string // set on the first render only; polls re-render minimally
+}
+
+func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		def := requestDefFromForm(r)
 		if def.ID == "" {
@@ -328,6 +353,10 @@ func postRunHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		if err := engine.ValidateTestConfig(cfg); err != nil {
+			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := store.SaveTestConfig(db, cfg); err != nil {
 			http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -339,26 +368,56 @@ func postRunHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			return
 		}
 
-		var run model.Run
-		switch cfg.Mode {
-		case model.ModeBurst:
-			run, err = engine.RunBurst(r.Context(), def, cfg, auth)
-		case model.ModeSoak:
-			run, err = engine.RunSoak(r.Context(), def, cfg, auth)
-		default:
-			run, err = engine.RunLoad(r.Context(), def, cfg, auth)
-		}
-		if err != nil {
-			http.Error(w, "run failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := store.SaveRun(db, run); err != nil {
-			http.Error(w, "save run: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		// One id for the registry entry, the poll URL, and the persisted run.
+		runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
+		reg.Start(r.Context(), runID, func(ctx context.Context) (model.Run, error) {
+			run, err := engine.Run(ctx, def, cfg, auth)
+			if err != nil {
+				return model.Run{}, err
+			}
+			run.ID = runID
+			return run, nil
+		})
 
-		renderTemplate(w, tmpl, "run-result-fragment.html", run)
+		w.WriteHeader(http.StatusAccepted)
+		renderTemplate(w, tmpl, "running.html", runningData{
+			RunID:  runID,
+			Detail: fmt.Sprintf("%s · concurrency %d", cfg.Mode, cfg.Concurrency),
+		})
 	}
+}
+
+// ---- GET /runs/status/{id} — poll an in-flight run --------------------------
+
+func runStatusHandler(tmpl *template.Template, reg *Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		renderStatus(w, r, tmpl, reg, r.PathValue("id"))
+	}
+}
+
+// ---- POST /runs/{id}/stop — cancel an in-flight run -------------------------
+
+func runStopHandler(tmpl *template.Template, reg *Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		reg.Stop(id) // no-op when already finished; status render decides
+		renderStatus(w, r, tmpl, reg, id)
+	}
+}
+
+// renderStatus renders the running fragment (keeps the client polling) or
+// the final result fragment (polling stops — no poll trigger in it).
+func renderStatus(w http.ResponseWriter, r *http.Request, tmpl *template.Template, reg *Registry, id string) {
+	status, result, ok := reg.Poll(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if status == "running" || result == nil {
+		renderTemplate(w, tmpl, "running.html", runningData{RunID: id})
+		return
+	}
+	renderTemplate(w, tmpl, "run-result-fragment.html", *result)
 }
 
 // ---- GET /runs/{id} — shareable page ---------------------------------------
@@ -434,9 +493,25 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 	if err != nil {
 		return cfg, err
 	}
-	cfg.TotalRequests, err = parseIntField(r, "total_requests", 1)
-	if err != nil {
-		return cfg, err
+
+	// Exactly one stop condition: soak uses Duration, everything else
+	// uses TotalRequests (the other field is ignored, never defaulted).
+	if cfg.Mode == model.ModeSoak {
+		raw := strings.TrimSpace(r.FormValue("soak_seconds"))
+		if raw == "" {
+			cfg.Duration = 30 * time.Second
+		} else {
+			secs, err := strconv.Atoi(raw)
+			if err != nil || secs <= 0 {
+				return cfg, fmt.Errorf("soak_seconds must be a positive integer")
+			}
+			cfg.Duration = time.Duration(secs) * time.Second
+		}
+	} else {
+		cfg.TotalRequests, err = parseIntField(r, "total_requests", 1)
+		if err != nil {
+			return cfg, err
+		}
 	}
 
 	if cfg.Mode == model.ModeBurst {
@@ -449,19 +524,6 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 			return cfg, err
 		}
 		cfg.BurstPattern = &model.BurstPattern{Count: count, Idle: idle}
-	}
-
-	if cfg.Mode == model.ModeSoak {
-		raw := strings.TrimSpace(r.FormValue("soak_seconds"))
-		if raw == "" {
-			cfg.Duration = 30 * time.Second
-		} else {
-			secs, err := strconv.Atoi(raw)
-			if err != nil || secs <= 0 {
-				return cfg, fmt.Errorf("soak_seconds must be a positive integer")
-			}
-			cfg.Duration = time.Duration(secs) * time.Second
-		}
 	}
 
 	if raw := strings.TrimSpace(r.FormValue("expected_status")); raw != "" {

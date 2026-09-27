@@ -22,4 +22,14 @@
     </tbody>
   </table>
   {{end}}
+  {{if .AssertionResults}}
+  <table style="margin-top:.5rem">
+    <thead><tr><th>Assertion</th><th>Result</th></tr></thead>
+    <tbody>
+    {{range .AssertionResults}}
+    <tr><td>{{.Name}}</td><td>{{if .Passed}}✓{{else}}✗{{end}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
 </div>

@@ -215,4 +215,44 @@ func TestRun_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRun_AssertionResultsAndBucketsRoundTrip(t *testing.T) {
+	// Arrange
+	orig := model.Run{
+		ID:           "run-x",
+		TestConfigID: "cfg-x",
+		StartedAt:    time.Now().UTC().Truncate(time.Second),
+		FinishedAt:   time.Now().UTC().Truncate(time.Second),
+		AssertionResults: []model.AssertionResult{
+			{Name: "Status code: 200", Passed: true},
+			{Name: "Error rate < 5%", Passed: false},
+		},
+		LatencyBuckets: []int{10, 5, 0, 0, 0, 0, 0, 0, 0},
+		Passed:         false,
+	}
+
+	// Act
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got model.Run
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Assert
+	if len(got.AssertionResults) != 2 {
+		t.Fatalf("AssertionResults len = %d, want 2", len(got.AssertionResults))
+	}
+	if got.AssertionResults[0].Name != "Status code: 200" || !got.AssertionResults[0].Passed {
+		t.Errorf("AssertionResults[0] = %+v", got.AssertionResults[0])
+	}
+	if got.AssertionResults[1].Passed {
+		t.Errorf("AssertionResults[1] should have Passed=false")
+	}
+	if len(got.LatencyBuckets) != len(model.LatencyBucketEdges)+1 {
+		t.Errorf("LatencyBuckets len = %d, want %d", len(got.LatencyBuckets), len(model.LatencyBucketEdges)+1)
+	}
+}
+
 func strPtr(s string) *string { return &s }

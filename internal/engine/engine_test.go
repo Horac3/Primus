@@ -200,7 +200,7 @@ func TestRunLoad_RespectsMaxConcurrency(t *testing.T) {
 	}
 
 	// Act
-	run, err := engine.RunLoad(context.Background(), req, cfg, model.AuthConfig{})
+	run, err := engine.Run(context.Background(), req, cfg, model.AuthConfig{})
 
 	// Assert
 	if err != nil {
@@ -247,7 +247,7 @@ func TestRunBurst_DeliversPulses(t *testing.T) {
 	}
 
 	// Act
-	_, err := engine.RunBurst(context.Background(), req, cfg, model.AuthConfig{})
+	_, err := engine.Run(context.Background(), req, cfg, model.AuthConfig{})
 
 	// Assert
 	if err != nil {
@@ -313,7 +313,7 @@ func TestRunLoad_StopsOnContextCancel(t *testing.T) {
 		time.Sleep(120 * time.Millisecond)
 		cancel()
 	}()
-	run, _ := engine.RunLoad(ctx, req, cfg, model.AuthConfig{})
+	run, _ := engine.Run(ctx, req, cfg, model.AuthConfig{})
 
 	// Assert — far fewer than totalRequests should have completed
 	total := 0

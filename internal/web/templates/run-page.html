@@ -57,5 +57,33 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
   <tr><th>Error rate</th><td>{{printf "%.2f%%" (mul .Summary.ErrorRate 100.0)}}</td></tr>
 </table>
 </section>
+
+{{if .AssertionResults}}
+<section>
+<h2>Assertions</h2>
+<table>
+  <thead><tr><th>Assertion</th><th>Result</th></tr></thead>
+  <tbody>
+  {{range .AssertionResults}}
+  <tr><td>{{.Name}}</td><td>{{if .Passed}}✓{{else}}✗{{end}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</section>
+{{end}}
+
+{{if .LatencyBuckets}}
+<section>
+<h2>Latency buckets (ms)</h2>
+<table>
+  <thead><tr><th>Bucket</th><th>Count</th></tr></thead>
+  <tbody>
+  {{range $i,$c := .LatencyBuckets}}
+  <tr><td>{{bucketLabel $i}}</td><td>{{$c}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</section>
+{{end}}
 </body>
 </html>
