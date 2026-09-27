@@ -240,6 +240,9 @@ func TestRun_CountMode_CompletesFixedCount(t *testing.T) {
 	if len(run.AssertionResults) != 1 || !run.AssertionResults[0].Passed {
 		t.Errorf("AssertionResults = %+v, want one passing entry", run.AssertionResults)
 	}
+	if run.Summary.TotalRequests != 10 {
+		t.Errorf("Summary.TotalRequests = %d, want 10", run.Summary.TotalRequests)
+	}
 	total := 0
 	for _, c := range run.LatencyBuckets {
 		total += c

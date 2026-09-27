@@ -30,6 +30,22 @@
     <textarea name="body" rows="5" placeholder='{"key":"value"}'>{{.BodyStr}}</textarea>
   </details>
 
+  <details open>
+    <summary>Headers</summary>
+    <div class="row" style="margin-top:.5rem;align-items:flex-end">
+      <label style="flex:0 0 140px">
+        <span>Header</span>
+        <input type="text" value="Authorization" disabled>
+      </label>
+      <label style="flex:1 1 auto">
+        <span>Value ([GLOBAL] = use top-bar auth)</span>
+        <input type="text" name="authz_override" placeholder="[GLOBAL]" value="{{.AuthzOverride}}">
+      </label>
+      <button type="button" class="secondary" title="Remove override — fall back to global auth"
+        onclick="document.getElementById('panel-form').authz_override.value=''">✕</button>
+    </div>
+  </details>
+
   <div style="margin:1rem 0 .25rem;display:flex;gap:.5rem;align-items:center">
     <button type="button" class="secondary"
       hx-post="/probe" hx-target="#results" hx-swap="innerHTML"
@@ -42,7 +58,7 @@
     <label>
       <span>Mode</span>
       <select name="mode" id="fmode" onchange="toggleMode()">
-        <option value="load">Load (constant)</option>
+        <option value="load">Load (timed)</option>
         <option value="burst">Burst (pulsed)</option>
         <option value="auth_probe">Auth probe</option>
         <option value="soak">Soak (timed)</option>
@@ -52,23 +68,32 @@
       <span>Concurrency</span>
       <input type="number" name="concurrency" value="5" min="1" max="500">
     </label>
-    <label id="total-req-label">
-      <span>Total requests</span>
-      <input type="number" name="total_requests" value="50" min="1">
-    </label>
-    <label id="soak-dur-label" style="display:none">
-      <span>Duration (seconds)</span>
-      <input type="number" name="soak_seconds" value="30" min="1" disabled>
-    </label>
   </div>
 
-  <details style="margin-top:.5rem">
-    <summary>Burst settings</summary>
-    <div class="row" style="margin-top:.5rem">
-      <label><span>Requests per burst</span><input type="number" name="burst_count" value="10" min="1"></label>
-      <label><span>Idle between bursts (ms)</span><input type="number" name="burst_idle_ms" value="500" min="0"></label>
+  <div id="fields-duration" style="margin-top:.5rem">
+    <div class="row">
+      <label>
+        <span>Duration (seconds)</span>
+        <input type="number" name="duration_seconds" value="30" min="1">
+      </label>
     </div>
-  </details>
+  </div>
+
+  <div id="fields-count" style="margin-top:.5rem;display:none">
+    <div class="row">
+      <label>
+        <span>Total requests</span>
+        <input type="number" name="total_requests" value="50" min="1" disabled>
+      </label>
+    </div>
+    <details style="margin-top:.5rem">
+      <summary>Burst settings</summary>
+      <div class="row" style="margin-top:.5rem">
+        <label><span>Requests per burst</span><input type="number" name="burst_count" value="10" min="1" disabled></label>
+        <label><span>Idle between bursts (ms)</span><input type="number" name="burst_idle_ms" value="500" min="0" disabled></label>
+      </div>
+    </details>
+  </div>
 
   <details style="margin-top:.5rem">
     <summary>Assertions (optional)</summary>

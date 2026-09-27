@@ -126,8 +126,7 @@ func TestProbe_NoAuth_SendsNoAuthHeader(t *testing.T) {
 	}
 }
 
-func TestRun_AppliesGlobalAuthToEveryRequest(t *testing.T) {
-	// Arrange — counts how many hits carried the bearer header
+func TestRun_AppliesGlobalAuthToEveryRequest(t *testing.T) { // Arrange — counts how many hits carried the bearer header
 	var authed, total int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		total++
@@ -160,5 +159,93 @@ func TestRun_AppliesGlobalAuthToEveryRequest(t *testing.T) {
 	}
 	if authed != total {
 		t.Errorf("authed = %d, want %d (global auth must apply to every request)", authed, total)
+	}
+}
+
+// ============================================================
+// Per-endpoint header override vs [GLOBAL] sentinel
+// ============================================================
+
+func TestProbe_HeaderOverrideWinsOverGlobal(t *testing.T) {
+	// Arrange — server records what it received
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	def := model.RequestDefinition{
+		ID: "o1", Name: "o1", Method: "GET", URLTemplate: srv.URL + "/x",
+		Headers: map[string]string{"Authorization": "Bearer per-endpoint"},
+	}
+	auth := model.AuthConfig{Type: model.AuthTypeBearer, Token: "global-tok"}
+
+	// Act
+	_, err := engine.Probe(context.Background(), def, auth)
+
+	// Assert — explicit per-endpoint value wins, global token never sent
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if gotAuth != "Bearer per-endpoint" {
+		t.Errorf("Authorization = %q, want per-endpoint override", gotAuth)
+	}
+}
+
+func TestProbe_GlobalSentinelDefersToGlobal(t *testing.T) {
+	// Arrange
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	def := model.RequestDefinition{
+		ID: "o2", Name: "o2", Method: "GET", URLTemplate: srv.URL + "/x",
+		Headers: map[string]string{"Authorization": model.HeaderGlobalSentinel},
+	}
+	auth := model.AuthConfig{Type: model.AuthTypeBearer, Token: "global-tok"}
+
+	// Act
+	_, err := engine.Probe(context.Background(), def, auth)
+
+	// Assert — sentinel means global applies; literal sentinel never sent
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if gotAuth != "Bearer global-tok" {
+		t.Errorf("Authorization = %q, want global token", gotAuth)
+	}
+}
+
+func TestProbe_SendsCustomHeaders(t *testing.T) {
+	// Arrange
+	var gotCustom, gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCustom = r.Header.Get("X-Custom")
+		gotCT = r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	def := model.RequestDefinition{
+		ID: "o3", Name: "o3", Method: "GET", URLTemplate: srv.URL + "/x",
+		Headers: map[string]string{"X-Custom": "v", "Content-Type": "application/json"},
+	}
+
+	// Act
+	_, err := engine.Probe(context.Background(), def, model.AuthConfig{})
+
+	// Assert — stored headers ride along
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if gotCustom != "v" {
+		t.Errorf("X-Custom = %q, want v", gotCustom)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotCT)
 	}
 }

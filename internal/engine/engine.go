@@ -210,20 +210,20 @@ type ProbeResult struct {
 	ErrMsg      string `json:"err_msg,omitempty"`
 }
 
-// applyAuth sets the Authorization headers on req from the global auth
-// config. Called at dispatch time so every mode uses current credentials.
+// applyAuth injects the global auth credentials — unless the request
+// already carries that header (explicit per-endpoint override wins).
 func applyAuth(req *http.Request, auth model.AuthConfig) {
 	switch auth.Type {
 	case model.AuthTypeBearer:
-		if auth.Token != "" {
+		if auth.Token != "" && req.Header.Get("Authorization") == "" {
 			req.Header.Set("Authorization", "Bearer "+auth.Token)
 		}
 	case model.AuthTypeAPIKey:
-		if auth.Header != "" && auth.Value != "" {
+		if auth.Header != "" && auth.Value != "" && req.Header.Get(auth.Header) == "" {
 			req.Header.Set(auth.Header, auth.Value)
 		}
 	case model.AuthTypeBasic:
-		if auth.Username != "" || auth.Password != "" {
+		if (auth.Username != "" || auth.Password != "") && req.Header.Get("Authorization") == "" {
 			req.SetBasicAuth(auth.Username, auth.Password)
 		}
 	}
@@ -304,8 +304,8 @@ func randomString(n int) string {
 // ============================================================
 
 // stopPredicate reports whether the run is complete: duration-based when
-// cfg.Duration > 0, count-based otherwise (exactly one is always set —
-/// see ValidateTestConfig).
+// cfg.Duration > 0, count-based otherwise (exactly one is always set;
+// see ValidateTestConfig).
 func stopPredicate(cfg model.TestConfig, start time.Time, sent int) bool {
 	if cfg.Duration > 0 {
 		return time.Since(start) >= cfg.Duration
@@ -415,7 +415,16 @@ func execRequest(ctx context.Context, client *http.Client, def model.RequestDefi
 		return result{err: err}
 	}
 
-	// Global auth, applied at dispatch time.
+	// Per-endpoint header overrides ride along verbatim — except the
+	// [GLOBAL] sentinel, which explicitly defers to global auth below.
+	for k, v := range def.Headers {
+		if v == model.HeaderGlobalSentinel {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+
+	// Global auth, applied at dispatch time (skips headers already set above).
 	applyAuth(req, auth)
 
 	start := time.Now()
@@ -464,12 +473,13 @@ func aggregate(results <-chan result, assertions model.Assertions, start time.Ti
 	}
 
 	return model.RunSummary{
-		StatusCounts: statusCounts,
-		ErrorCount:   errorCount,
-		P50Millis:    p50,
-		P95Millis:    p95,
-		P99Millis:    p99,
-		ErrorRate:    errorRate,
+		StatusCounts:  statusCounts,
+		ErrorCount:    errorCount,
+		P50Millis:     p50,
+		P95Millis:     p95,
+		P99Millis:     p99,
+		ErrorRate:     errorRate,
+		TotalRequests: total,
 	}, Bucketize(latencies)
 }
 

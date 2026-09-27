@@ -4,13 +4,14 @@
   <button class="secondary" style="padding:.2rem .6rem"
     hx-get="/requests/new" hx-target="#main-panel" hx-swap="innerHTML">+ New</button>
 </div>
-{{if .}}
+{{if .Endpoints}}
 <div>
-{{range .}}
+{{range .Endpoints}}
   <button class="ep-row"
     hx-get="/requests/{{.ID}}" hx-target="#main-panel" hx-swap="innerHTML">
     <span class="method">{{.Method}}</span>
-    <span>{{.Name}}</span><br>
+    <span>{{.Name}}</span>
+    <span class="spark">{{range index $.Recent .ID}}<i class="dot {{if .}}pass{{else}}fail{{end}}"></i>{{end}}</span><br>
     <span class="muted ep-path">{{.URLTemplate}}</span>
   </button>
 {{end}}

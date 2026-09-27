@@ -1,6 +1,6 @@
 {{- /* running.html — fragment for an in-flight run. Polls itself until done. */ -}}
 <div class="card" data-run-id="{{.RunID}}"
-  hx-get="/runs/status/{{.RunID}}" hx-trigger="every 1s" hx-target="#results" hx-swap="innerHTML">
+  hx-get="/runs/{{.RunID}}/status" hx-trigger="every 1s" hx-target="#results" hx-swap="innerHTML">
   <p><span class="muted">▶ Running…</span>{{if .Detail}} <span class="muted">{{.Detail}}</span>{{end}}</p>
   <div style="margin-top:.5rem">
     <button type="button" class="secondary"

@@ -45,11 +45,11 @@ const (
 
 // DynamicValue describes a generated parameter value.
 type DynamicValue struct {
-	Kind       DynamicKind `json:"kind"`
-	IntMin     int         `json:"int_min,omitempty"`
-	IntMax     int         `json:"int_max,omitempty"`
-	StringLen  int         `json:"string_len,omitempty"`
-	SeqStart   int         `json:"seq_start,omitempty"`
+	Kind      DynamicKind `json:"kind"`
+	IntMin    int         `json:"int_min,omitempty"`
+	IntMax    int         `json:"int_max,omitempty"`
+	StringLen int         `json:"string_len,omitempty"`
+	SeqStart  int         `json:"seq_start,omitempty"`
 }
 
 // ParamSpec is either a static string or a dynamically generated value.
@@ -57,10 +57,14 @@ type DynamicValue struct {
 // EnumValues captures any enum constraint from the source spec so a UI
 // can render a select; it does not restrict runtime values.
 type ParamSpec struct {
-	Static      *string       `json:"static,omitempty"`
-	Dynamic     *DynamicValue `json:"dynamic,omitempty"`
-	EnumValues  []string      `json:"enum_values,omitempty"`
+	Static     *string       `json:"static,omitempty"`
+	Dynamic    *DynamicValue `json:"dynamic,omitempty"`
+	EnumValues []string      `json:"enum_values,omitempty"`
 }
+
+// HeaderGlobalSentinel marks a per-endpoint header row as "use the global
+// auth value". Any other stored value overrides global auth injection.
+const HeaderGlobalSentinel = "[GLOBAL]"
 
 // RequestDefinition is a reusable template for an HTTP request.
 // Authentication is global (see AuthConfig) and intentionally not stored here.
@@ -118,6 +122,9 @@ type RunSummary struct {
 	P95Millis    int         `json:"p95_millis"`
 	P99Millis    int         `json:"p99_millis"`
 	ErrorRate    float64     `json:"error_rate"`
+	// TotalRequests is the actual number of fired requests (completed
+	// responses + transport errors). Basis for requests/sec.
+	TotalRequests int `json:"total_requests"`
 }
 
 // RunOutcome is the tri-state result of a Run.

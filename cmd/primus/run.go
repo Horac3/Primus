@@ -69,12 +69,12 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 
 	// Print the summary as JSON to stdout for CI consumption.
 	out := struct {
-		ID           string          `json:"id"`
-		TestConfigID string          `json:"test_config_id"`
-		StartedAt    string          `json:"started_at"`
-		FinishedAt   string          `json:"finished_at"`
+		ID           string           `json:"id"`
+		TestConfigID string           `json:"test_config_id"`
+		StartedAt    string           `json:"started_at"`
+		FinishedAt   string           `json:"finished_at"`
 		Summary      model.RunSummary `json:"summary"`
-		Passed       bool            `json:"passed"`
+		Passed       bool             `json:"passed"`
 	}{
 		ID:           run.ID,
 		TestConfigID: run.TestConfigID,

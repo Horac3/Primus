@@ -17,6 +17,11 @@ th { background:#f7f8fa; }
 a { color:#3b82d4; text-decoration:none; }
 section { margin-top:1.25rem; }
 h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.4rem; border-bottom:1px solid #e5e7eb; padding-bottom:.2rem; }
+.hist { display:flex; align-items:flex-end; gap:3px; height:110px; padding:.5rem;
+        background:#f7f8fa; border:1px solid #e5e7eb; border-radius:4px; margin-top:.5rem; }
+.hbar { flex:0 0 20px; background:#3b82d4; border-radius:2px 2px 0 0; min-height:2px; }
+.verdict-pass { color:#065f46; font-weight:600; }
+.verdict-fail { color:#991b1b; font-weight:600; }
 </style>
 </head>
 <body>
@@ -55,6 +60,8 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
 <table>
   <tr><th>Error count</th><td>{{.Summary.ErrorCount}}</td></tr>
   <tr><th>Error rate</th><td>{{printf "%.2f%%" (mul .Summary.ErrorRate 100.0)}}</td></tr>
+  <tr><th>Requests</th><td>{{.Summary.TotalRequests}}</td></tr>
+  <tr><th>Requests/sec</th><td>{{requestsPerSec .}}</td></tr>
 </table>
 </section>
 
@@ -65,7 +72,7 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
   <thead><tr><th>Assertion</th><th>Result</th></tr></thead>
   <tbody>
   {{range .AssertionResults}}
-  <tr><td>{{.Name}}</td><td>{{if .Passed}}✓{{else}}✗{{end}}</td></tr>
+  <tr><td>{{.Name}}</td><td>{{if .Passed}}<span class="verdict-pass">✓ PASSED</span>{{else}}<span class="verdict-fail">✗ FAILED</span>{{end}}</td></tr>
   {{end}}
   </tbody>
 </table>
@@ -75,6 +82,7 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
 {{if .LatencyBuckets}}
 <section>
 <h2>Latency buckets (ms)</h2>
+{{template "histogram" .}}
 <table>
   <thead><tr><th>Bucket</th><th>Count</th></tr></thead>
   <tbody>

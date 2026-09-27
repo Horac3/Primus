@@ -1,0 +1,11 @@
+{{- /* histogram.html — shared response-time histogram, invoked via {{template "histogram" .}} with a model.Run */ -}}
+{{define "histogram"}}
+{{if .LatencyBuckets}}
+<div class="hist" title="Response-time histogram (ms)">
+  {{range histogramBars .LatencyBuckets}}
+  <div class="hbar" style="height:{{.Height}}px" title="{{.Label}} ms: {{.Count}}"></div>
+  {{end}}
+</div>
+<p class="muted" style="font-size:.78rem">Response-time histogram (ms per bucket)</p>
+{{end}}
+{{end}}

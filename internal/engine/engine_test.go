@@ -75,7 +75,7 @@ func TestEvaluateAssertions_TableDriven(t *testing.T) {
 			assertions: model.Assertions{
 				MaxErrorRate: 0.05,
 			},
-			summary: model.RunSummary{ErrorRate: 0.10},
+			summary:    model.RunSummary{ErrorRate: 0.10},
 			wantPassed: false,
 		},
 		{
@@ -83,7 +83,7 @@ func TestEvaluateAssertions_TableDriven(t *testing.T) {
 			assertions: model.Assertions{
 				MaxP95Millis: 200,
 			},
-			summary: model.RunSummary{P95Millis: 500},
+			summary:    model.RunSummary{P95Millis: 500},
 			wantPassed: false,
 		},
 		{

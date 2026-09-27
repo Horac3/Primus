@@ -48,6 +48,14 @@ details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 
 .ep-row .method { font-weight:700; color:#3b82d4; font-size:.78rem; }
 .ep-row .ep-path { font-size:.78rem; word-break:break-all; }
 .method { font-weight:700; color:#3b82d4; font-size:.85rem; }
+.hist { display:flex; align-items:flex-end; gap:3px; height:110px; padding:.5rem;
+        background:#fff; border:1px solid #e5e7eb; border-radius:4px; margin-top:.5rem; }
+.hbar { flex:0 0 20px; background:#3b82d4; border-radius:2px 2px 0 0; min-height:2px; }
+.verdict-pass { color:#065f46; font-weight:600; }
+.verdict-fail { color:#991b1b; font-weight:600; }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:2px; }
+.dot.pass { background:#16a34a; }
+.dot.fail { background:#dc2626; }
 </style>
 </head>
 <body>
@@ -81,11 +89,11 @@ details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 
 <script>
 function toggleMode() {
   const m = document.getElementById('fmode').value;
-  const soak = m === 'soak';
-  document.getElementById('total-req-label').style.display = soak ? 'none' : '';
-  document.getElementById('soak-dur-label').style.display  = soak ? '' : 'none';
-  document.querySelector('#total-req-label input').disabled = soak;
-  document.querySelector('#soak-dur-label input').disabled  = !soak;
+  const count = m === 'burst' || m === 'auth_probe';
+  document.getElementById('fields-duration').style.display = count ? 'none' : '';
+  document.getElementById('fields-count').style.display = count ? '' : 'none';
+  document.querySelectorAll('#fields-duration input').forEach(i => i.disabled = count);
+  document.querySelectorAll('#fields-count input').forEach(i => i.disabled = !count);
 }
 </script>
 </body>

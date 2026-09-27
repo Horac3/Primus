@@ -287,6 +287,41 @@ func TestSaveAndGetTestConfig(t *testing.T) {
 	}
 }
 
+func TestListTestConfigs(t *testing.T) {
+	// Arrange
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for _, c := range []model.TestConfig{
+		{ID: "cfg-a", RequestID: "req-1", Mode: model.ModeLoad, Concurrency: 1, TotalRequests: 5},
+		{ID: "cfg-b", RequestID: "req-2", Mode: model.ModeSoak, Concurrency: 2, Duration: 1000000000},
+	} {
+		if err := store.SaveTestConfig(db, c); err != nil {
+			t.Fatalf("SaveTestConfig(%s): %v", c.ID, err)
+		}
+	}
+
+	// Act
+	list, err := store.ListTestConfigs(db)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("len = %d, want 2", len(list))
+	}
+	byID := map[string]model.TestConfig{}
+	for _, c := range list {
+		byID[c.ID] = c
+	}
+	if byID["cfg-b"].RequestID != "req-2" {
+		t.Errorf("cfg-b RequestID = %q, want req-2", byID["cfg-b"].RequestID)
+	}
+}
+
 // ---- Run CRUD --------------------------------------------------------------
 
 func TestSaveAndGetRun(t *testing.T) {

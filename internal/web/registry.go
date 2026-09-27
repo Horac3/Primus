@@ -42,9 +42,11 @@ func NewRegistry(persist func(model.Run) error) *Registry {
 }
 
 // Start launches fn in a goroutine under a cancellable context and returns
-// immediately. Exactly one final state is persisted per id.
+// immediately. The context is detached from parent cancellation (the HTTP
+// request context dies when the 202 response is written — the run must
+// outlive it); only Stop cancels it. Exactly one final state is persisted.
 func (r *Registry) Start(parent context.Context, id string, fn func(ctx context.Context) (model.Run, error)) {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	h := &runHandle{cancel: cancel, done: make(chan struct{})}
 
 	r.mu.Lock()

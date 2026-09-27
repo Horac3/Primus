@@ -125,12 +125,12 @@ func TestTestConfig_JSONRoundTrip(t *testing.T) {
 func TestTestConfig_SoakMode_DurationRoundTrip(t *testing.T) {
 	// Arrange
 	orig := model.TestConfig{
-		ID:            "cfg-soak",
-		RequestID:     "req-1",
-		Mode:          model.ModeSoak,
-		Concurrency:   3,
-		Duration:      90 * time.Second,
-		Assertions:    model.Assertions{ExpectedStatus: []int{200}},
+		ID:          "cfg-soak",
+		RequestID:   "req-1",
+		Mode:        model.ModeSoak,
+		Concurrency: 3,
+		Duration:    90 * time.Second,
+		Assertions:  model.Assertions{ExpectedStatus: []int{200}},
 	}
 
 	// Act

@@ -169,6 +169,28 @@ func GetTestConfig(db *sql.DB, id string) (model.TestConfig, error) {
 	return c, nil
 }
 
+// ListTestConfigs returns all stored TestConfigs.
+func ListTestConfigs(db *sql.DB) ([]model.TestConfig, error) {
+	rows, err := db.Query(`SELECT payload FROM test_configs`)
+	if err != nil {
+		return nil, fmt.Errorf("ListTestConfigs: %w", err)
+	}
+	defer rows.Close()
+	var out []model.TestConfig
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var c model.TestConfig
+		if err := json.Unmarshal([]byte(payload), &c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // SaveRun inserts or replaces a Run.
 func SaveRun(db *sql.DB, r model.Run) error {
 	b, err := json.Marshal(r)

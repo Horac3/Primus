@@ -128,13 +128,13 @@ func postRuns(t *testing.T, mux http.Handler, form url.Values) string {
 	return rest[:j]
 }
 
-// pollDone polls GET /runs/status/{id} until the result fragment renders.
+// pollDone polls GET /runs/{id}/status until the result fragment renders.
 func pollDone(t *testing.T, mux http.Handler, id string) string {
 	t.Helper()
 	var body string
 	for i := 0; i < 100; i++ {
 		time.Sleep(50 * time.Millisecond)
-		req := httptest.NewRequest(http.MethodGet, "/runs/status/"+id, nil)
+		req := httptest.NewRequest(http.MethodGet, "/runs/"+id+"/status", nil)
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, req)
 		if rr.Code == http.StatusNotFound {
@@ -164,11 +164,11 @@ func TestRunsHandler_AllFailed_ZeroAssertions_RunPassedFalse(t *testing.T) {
 	mux := web.NewServer(db)
 
 	form := url.Values{
-		"method":         {"GET"},
-		"url":            {targetSrv.URL + "/fail"},
-		"mode":           {"load"},
-		"concurrency":    {"2"},
-		"total_requests": {"4"},
+		"method":           {"GET"},
+		"url":              {targetSrv.URL + "/fail"},
+		"mode":             {"load"},
+		"concurrency":      {"2"},
+		"duration_seconds": {"1"},
 		// no expected_status, no assertions
 	}
 
@@ -208,11 +208,11 @@ func TestRunsHandler_ZeroAssertions_SomeSuccess_OutcomeNoAssertions(t *testing.T
 	mux := web.NewServer(db)
 
 	form := url.Values{
-		"method":         {"GET"},
-		"url":            {targetSrv.URL + "/ok"},
-		"mode":           {"load"},
-		"concurrency":    {"2"},
-		"total_requests": {"4"},
+		"method":           {"GET"},
+		"url":              {targetSrv.URL + "/ok"},
+		"mode":             {"load"},
+		"concurrency":      {"2"},
+		"duration_seconds": {"1"},
 	}
 
 	// Act
@@ -248,12 +248,12 @@ func TestRunsHandler_AssertionsMet_OutcomePass(t *testing.T) {
 	mux := web.NewServer(db)
 
 	form := url.Values{
-		"method":          {"GET"},
-		"url":             {targetSrv.URL + "/ok"},
-		"mode":            {"load"},
-		"concurrency":     {"2"},
-		"total_requests":  {"4"},
-		"expected_status": {"200"},
+		"method":           {"GET"},
+		"url":              {targetSrv.URL + "/ok"},
+		"mode":             {"load"},
+		"concurrency":      {"2"},
+		"duration_seconds": {"1"},
+		"expected_status":  {"200"},
 	}
 
 	// Act
@@ -263,6 +263,15 @@ func TestRunsHandler_AssertionsMet_OutcomePass(t *testing.T) {
 	// Assert — result fragment carries the per-assertion checklist
 	if !strings.Contains(body, "Status code: 200") {
 		t.Errorf("result missing assertion checklist; body: %s", body)
+	}
+	if !strings.Contains(body, "PASSED") {
+		t.Errorf("checklist missing per-row verdict; body: %s", body)
+	}
+	if !strings.Contains(body, "verdict-pass") {
+		t.Errorf("checklist missing per-row verdict class; body: %s", body)
+	}
+	if !strings.Contains(body, "Requests/sec") {
+		t.Errorf("result missing requests/sec metric; body: %s", body)
 	}
 	runs, _ := store.ListAllRuns(db)
 	if len(runs) == 0 {
@@ -295,12 +304,12 @@ func TestRunsHandler_SoakMode_PersistsRun(t *testing.T) {
 	mux := web.NewServer(db)
 
 	form := url.Values{
-		"method":          {"GET"},
-		"url":             {targetSrv.URL + "/soak"},
-		"mode":            {"soak"},
-		"concurrency":     {"2"},
-		"soak_seconds":    {"1"},
-		"expected_status": {"200"},
+		"method":           {"GET"},
+		"url":              {targetSrv.URL + "/soak"},
+		"mode":             {"soak"},
+		"concurrency":      {"2"},
+		"duration_seconds": {"1"},
+		"expected_status":  {"200"},
 	}
 
 	// Act
@@ -339,16 +348,17 @@ func TestRunsHandler_Stop_CancelsMidRun(t *testing.T) {
 	mux := web.NewServer(db)
 
 	form := url.Values{
-		"method":          {"GET"},
-		"url":             {targetSrv.URL + "/slow"},
-		"mode":            {"load"},
-		"concurrency":     {"1"},
-		"total_requests":  {"20"},
-		"expected_status": {"200"},
+		"method":           {"GET"},
+		"url":              {targetSrv.URL + "/slow"},
+		"mode":             {"load"},
+		"concurrency":      {"1"},
+		"duration_seconds": {"30"},
+		"expected_status":  {"200"},
 	}
 
-	// Act — start, stop promptly, poll to the (partial) finish
+	// Act — let the first slow request complete, then stop promptly
 	id := postRuns(t, mux, form)
+	time.Sleep(400 * time.Millisecond)
 	stopReq := httptest.NewRequest(http.MethodPost, "/runs/"+id+"/stop", nil)
 	stopRR := httptest.NewRecorder()
 	mux.ServeHTTP(stopRR, stopReq)
@@ -357,7 +367,7 @@ func TestRunsHandler_Stop_CancelsMidRun(t *testing.T) {
 	}
 	pollDone(t, mux, id)
 
-	// Assert — partial result persisted, far short of the 20 requested
+	// Assert — stop settled promptly (not stuck running) with a run persisted
 	runs, _ := store.ListAllRuns(db)
 	if len(runs) == 0 {
 		t.Fatal("no runs persisted")
@@ -367,8 +377,8 @@ func TestRunsHandler_Stop_CancelsMidRun(t *testing.T) {
 		total += c
 	}
 	total += runs[0].Summary.ErrorCount
-	if total >= 20 {
-		t.Errorf("recorded = %d, want partial (< 20) after Stop", total)
+	if total == 0 {
+		t.Error("stopped run recorded no requests at all")
 	}
 }
 
@@ -382,11 +392,11 @@ func TestRunsHandler_InvalidSoakDuration_Returns400(t *testing.T) {
 	mux := web.NewServer(db)
 
 	form := url.Values{
-		"method":       {"GET"},
-		"url":          {"http://x.invalid/"},
-		"mode":         {"soak"},
-		"concurrency":  {"1"},
-		"soak_seconds": {"0"},
+		"method":           {"GET"},
+		"url":              {"http://x.invalid/"},
+		"mode":             {"soak"},
+		"concurrency":      {"1"},
+		"duration_seconds": {"0"},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -569,6 +579,63 @@ func TestSidebarFragment_ListsEndpoints(t *testing.T) {
 }
 
 // ============================================================
+// Sidebar sparkline — recent pass/fail dots per endpoint
+// ============================================================
+
+func TestSidebarFragment_ShowsRecentRunDots(t *testing.T) {
+	// Arrange — two endpoints, runs only for the first (pass then fail)
+	db := newTestDB(t)
+	for _, d := range []model.RequestDefinition{
+		{ID: "ep-1", Name: "Get Pet", Method: "GET", URLTemplate: "https://x.com/pet"},
+		{ID: "ep-2", Name: "Add Pet", Method: "POST", URLTemplate: "https://x.com/pet"},
+	} {
+		if err := store.SaveRequestDefinition(db, d); err != nil {
+			t.Fatalf("SaveRequestDefinition: %v", err)
+		}
+	}
+	if err := store.SaveTestConfig(db, model.TestConfig{
+		ID: "cfg-1", RequestID: "ep-1", Mode: model.ModeLoad,
+		Concurrency: 1, TotalRequests: 1,
+	}); err != nil {
+		t.Fatalf("SaveTestConfig: %v", err)
+	}
+	now := time.Now().UTC()
+	for i, passed := range []bool{true, false} {
+		if err := store.SaveRun(db, model.Run{
+			ID:           string(rune('a'+i)) + "-run",
+			TestConfigID: "cfg-1",
+			StartedAt:    now.Add(time.Duration(i) * time.Second),
+			FinishedAt:   now.Add(time.Duration(i)*time.Second + time.Second),
+			Passed:       passed,
+		}); err != nil {
+			t.Fatalf("SaveRun: %v", err)
+		}
+	}
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/sidebar-fragment", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — one pass dot and one fail dot for ep-1, ep-2 row intact
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "dot pass") {
+		t.Errorf("sidebar missing pass dot; body: %s", body)
+	}
+	if !strings.Contains(body, "dot fail") {
+		t.Errorf("sidebar missing fail dot; body: %s", body)
+	}
+	if !strings.Contains(body, "Add Pet") {
+		t.Errorf("endpoint without runs missing from sidebar; body: %s", body)
+	}
+}
+
+// ============================================================
 // GET /requests/{id} — pre-filled builder, no auth field
 // ============================================================
 
@@ -644,6 +711,179 @@ func TestRequestsHandler_UnknownID_Returns404(t *testing.T) {
 }
 
 // ============================================================
+// POST /probe with authz_override — per-endpoint win over global
+// ============================================================
+
+func TestProbeHandler_OverrideField_WinsOverGlobal(t *testing.T) {
+	// Arrange — target only accepts the per-endpoint credential
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer custom" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	if err := store.SaveGlobalAuth(db, model.AuthConfig{Type: model.AuthTypeBearer, Token: "global-tok"}); err != nil {
+		t.Fatalf("SaveGlobalAuth: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":         {"GET"},
+		"url":            {targetSrv.URL + "/x"},
+		"authz_override": {"Bearer custom"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — 200 proves the override was sent instead of the global token
+	if rr.Code >= 500 {
+		t.Fatalf("status = %d, want < 500; body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "200") {
+		t.Errorf("probe did not use override (want 200); body: %s", rr.Body.String())
+	}
+}
+
+func TestProbeHandler_SentinelOverride_DefersToGlobal(t *testing.T) {
+	// Arrange — target requires the global credential
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer global-tok" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	if err := store.SaveGlobalAuth(db, model.AuthConfig{Type: model.AuthTypeBearer, Token: "global-tok"}); err != nil {
+		t.Fatalf("SaveGlobalAuth: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":         {"GET"},
+		"url":            {targetSrv.URL + "/x"},
+		"authz_override": {model.HeaderGlobalSentinel},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — sentinel keeps global auth; literal sentinel never sent
+	if rr.Code >= 500 {
+		t.Fatalf("status = %d, want < 500; body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "200") {
+		t.Errorf("probe did not apply global auth (want 200); body: %s", rr.Body.String())
+	}
+}
+
+// ============================================================
+// Endpoint panel shows the Authorization override row
+// ============================================================
+
+func TestRequestsHandler_PanelHasOverrideRow(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+		ID: "ep-ov", Name: "Ov", Method: "GET", URLTemplate: "https://x.com/o",
+	}); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/requests/ep-ov", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — [GLOBAL] placeholder row, removable per request
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, model.HeaderGlobalSentinel) {
+		t.Errorf("panel missing [GLOBAL] placeholder; body: %s", body)
+	}
+	if !strings.Contains(body, "authz_override") {
+		t.Errorf("panel missing override field; body: %s", body)
+	}
+}
+
+// ============================================================
+// POST /runs returns immediately even for long-duration runs
+// ============================================================
+
+func TestRunsHandler_ReturnsImmediately_ForLongRun(t *testing.T) {
+	// Arrange — instant target, but a 60s duration (would block a sync handler)
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":           {"GET"},
+		"url":              {targetSrv.URL + "/long"},
+		"mode":             {"load"},
+		"concurrency":      {"1"},
+		"duration_seconds": {"60"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	start := time.Now()
+	mux.ServeHTTP(rr, req)
+	elapsed := time.Since(start)
+
+	// Assert — accepted immediately, far short of the 60s run
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body: %s", rr.Code, rr.Body.String())
+	}
+	if elapsed >= 10*time.Second {
+		t.Errorf("POST /runs took %v, want immediate return", elapsed)
+	}
+
+	// Cleanup — the 60s run must still be alive (proves it outlived the
+	// 202 response), then stop it and confirm it settles (not stuck)
+	body := rr.Body.String()
+	const marker = `data-run-id="`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("missing data-run-id; body: %s", body)
+	}
+	rest := body[i+len(marker):]
+	id := rest[:strings.Index(rest, `"`)]
+	aliveReq := httptest.NewRequest(http.MethodGet, "/runs/"+id+"/status", nil)
+	aliveRR := httptest.NewRecorder()
+	mux.ServeHTTP(aliveRR, aliveReq)
+	if strings.Contains(aliveRR.Body.String(), "badge-") {
+		t.Fatalf("run finished before Stop — it should still be running; body: %s", aliveRR.Body.String())
+	}
+	stopReq := httptest.NewRequest(http.MethodPost, "/runs/"+id+"/stop", nil)
+	stopRR := httptest.NewRecorder()
+	mux.ServeHTTP(stopRR, stopReq)
+	pollDone(t, mux, id)
+}
+
+// ============================================================
 // POST /probe uses global auth — no re-entering per endpoint
 // ============================================================
 
@@ -678,6 +918,84 @@ func TestProbeHandler_UsesGlobalAuthAutomatically(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "200") {
 		t.Errorf("probe did not authenticate (want 200); body: %s", rr.Body.String())
+	}
+}
+
+// ============================================================
+// POST /runs — failing assertions render FAILED checklist rows
+// ============================================================
+
+func TestRunsHandler_ChecklistShowsFailedRows(t *testing.T) {
+	// Arrange — server returns 500, assertions demand 200
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":           {"GET"},
+		"url":              {targetSrv.URL + "/bad"},
+		"mode":             {"load"},
+		"concurrency":      {"2"},
+		"duration_seconds": {"1"},
+		"expected_status":  {"200"},
+	}
+
+	// Act
+	id := postRuns(t, mux, form)
+	body := pollDone(t, mux, id)
+
+	// Assert — checklist names the assertion and marks the row FAILED
+	if !strings.Contains(body, "Status code: 200") {
+		t.Errorf("result missing checklist row; body: %s", body)
+	}
+	if !strings.Contains(body, "verdict-fail") {
+		t.Errorf("result missing per-row FAILED verdict; body: %s", body)
+	}
+}
+
+// ============================================================
+// GET /runs/{id} — histogram bars scale to the max bucket
+// ============================================================
+
+func TestGetRunHandler_HistogramBarHeights(t *testing.T) {
+	// Arrange — run with a known bucket distribution (max 10 → 100px)
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	run := model.Run{
+		ID:             "run-hist",
+		TestConfigID:   "cfg-x",
+		StartedAt:      now,
+		FinishedAt:     now.Add(time.Second),
+		Summary:        model.RunSummary{StatusCounts: map[int]int{200: 15}},
+		Outcome:        model.OutcomePass,
+		Passed:         true,
+		LatencyBuckets: []int{10, 5, 0, 0, 0, 0, 0, 0, 0},
+	}
+	if err := store.SaveRun(db, run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/runs/run-hist", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — tallest bar 100px, half bar 50px
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "height:100px") {
+		t.Errorf("missing full-height bar; body: %s", body)
+	}
+	if !strings.Contains(body, "height:50px") {
+		t.Errorf("missing half-height bar; body: %s", body)
 	}
 }
 

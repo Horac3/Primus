@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -74,19 +75,56 @@ var templateFuncs = template.FuncMap{
 		}
 	},
 	"bucketLabel": func(i int) string {
-		edges := model.LatencyBucketEdges
-		if i < 0 || i > len(edges) {
-			return "?"
-		}
-		if i == len(edges) {
-			return "≥" + strconv.Itoa(edges[len(edges)-1])
-		}
-		lo := 0
-		if i > 0 {
-			lo = edges[i-1]
-		}
-		return strconv.Itoa(lo) + "–" + strconv.Itoa(edges[i]-1)
+		return bucketLabel(i)
 	},
+	"requestsPerSec": func(r model.Run) string {
+		secs := r.FinishedAt.Sub(r.StartedAt).Seconds()
+		if secs <= 0 {
+			secs = 0.001
+		}
+		return strconv.FormatFloat(float64(r.Summary.TotalRequests)/secs, 'f', 1, 64)
+	},
+	"histogramBars": func(buckets []int) []bucketBar {
+		max := 0
+		for _, c := range buckets {
+			if c > max {
+				max = c
+			}
+		}
+		out := make([]bucketBar, 0, len(buckets))
+		for i, c := range buckets {
+			h := 0
+			if max > 0 {
+				h = (c*100 + max/2) / max
+			}
+			out = append(out, bucketBar{Label: bucketLabel(i), Height: h, Count: c})
+		}
+		return out
+	},
+}
+
+// bucketLabel names bucket i of the fixed latency edges ("0–49", …, "≥600").
+func bucketLabel(i int) string {
+	edges := model.LatencyBucketEdges
+	if i < 0 || i > len(edges) {
+		return "?"
+	}
+	if i == len(edges) {
+		return "≥" + strconv.Itoa(edges[len(edges)-1])
+	}
+	lo := 0
+	if i > 0 {
+		lo = edges[i-1]
+	}
+	return strconv.Itoa(lo) + "–" + strconv.Itoa(edges[i]-1)
+}
+
+// bucketBar is one histogram bar: Label is the ms range, Height is percent
+// of the tallest bar (0-100, rendered as px), Count the raw bucket count.
+type bucketBar struct {
+	Label  string
+	Height int
+	Count  int
 }
 
 // loadEmbeddedTemplates parses all HTML templates from the embedded FS.
@@ -135,7 +173,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /import", importHandler(db, tmpl))
 	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
 	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg))
-	mux.HandleFunc("GET /runs/status/{id}", runStatusHandler(tmpl, reg))
+	mux.HandleFunc("GET /runs/{id}/status", runStatusHandler(tmpl, reg))
 	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(tmpl, reg))
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
 	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl))
@@ -205,23 +243,70 @@ func authFragmentHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 
 // ---- sidebar ---------------------------------------------------------------
 
+type sidebarData struct {
+	Endpoints []model.RequestDefinition
+	// Recent maps an endpoint ID to its latest (≤8, newest-first) run
+	// pass/fail flags — the sidebar sparkline.
+	Recent map[string][]bool
+}
+
+// loadSidebarData joins endpoints → test configs → runs for the sparkline.
+func loadSidebarData(db *sql.DB) (sidebarData, error) {
+	defs, err := store.ListRequestDefinitions(db)
+	if err != nil {
+		return sidebarData{}, fmt.Errorf("list endpoints: %w", err)
+	}
+	cfgs, err := store.ListTestConfigs(db)
+	if err != nil {
+		return sidebarData{}, fmt.Errorf("list configs: %w", err)
+	}
+	cfgReq := make(map[string]string, len(cfgs))
+	for _, c := range cfgs {
+		cfgReq[c.ID] = c.RequestID
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		return sidebarData{}, fmt.Errorf("list runs: %w", err)
+	}
+	byReq := make(map[string][]model.Run)
+	for _, r := range runs {
+		if req, ok := cfgReq[r.TestConfigID]; ok {
+			byReq[req] = append(byReq[req], r)
+		}
+	}
+	recent := make(map[string][]bool, len(byReq))
+	for req, rs := range byReq {
+		sort.Slice(rs, func(i, j int) bool { return rs[i].StartedAt.After(rs[j].StartedAt) })
+		if len(rs) > 8 {
+			rs = rs[:8]
+		}
+		flags := make([]bool, 0, len(rs))
+		for _, r := range rs {
+			flags = append(flags, r.Passed)
+		}
+		recent[req] = flags
+	}
+	return sidebarData{Endpoints: defs, Recent: recent}, nil
+}
+
 func sidebarHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		defs, err := store.ListRequestDefinitions(db)
+		data, err := loadSidebarData(db)
 		if err != nil {
-			http.Error(w, "list endpoints: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		renderTemplate(w, tmpl, "sidebar.html", defs)
+		renderTemplate(w, tmpl, "sidebar.html", data)
 	}
 }
 
 // ---- GET /requests/{id} — main-panel fragment ------------------------------
 
 type panelData struct {
-	Def     model.RequestDefinition
-	BodyStr string
-	IsNew   bool
+	Def           model.RequestDefinition
+	BodyStr       string
+	AuthzOverride string
+	IsNew         bool
 }
 
 func panelDataFor(def model.RequestDefinition, isNew bool) panelData {
@@ -229,7 +314,11 @@ func panelDataFor(def model.RequestDefinition, isNew bool) panelData {
 	if def.Body != nil {
 		body = string(def.Body.Raw)
 	}
-	return panelData{Def: def, BodyStr: body, IsNew: isNew}
+	var override string
+	if def.Headers != nil {
+		override = def.Headers["Authorization"]
+	}
+	return panelData{Def: def, BodyStr: body, AuthzOverride: override, IsNew: isNew}
 }
 
 func requestPanelHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
@@ -284,7 +373,7 @@ func importHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			}
 		}
 
-		all, err := store.ListRequestDefinitions(db)
+		data, err := loadSidebarData(db)
 		if err != nil {
 			http.Error(w, "list failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -293,7 +382,7 @@ func importHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 		// Sidebar refresh, plus the first imported endpoint loaded into the
 		// main panel via an out-of-band swap.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.ExecuteTemplate(w, "sidebar.html", all); err != nil {
+		if err := tmpl.ExecuteTemplate(w, "sidebar.html", data); err != nil {
 			log.Printf("template sidebar.html: %v", err)
 			return
 		}
@@ -450,7 +539,9 @@ func historyFragmentHandler(db *sql.DB, tmpl *template.Template) http.HandlerFun
 // ---- helpers ---------------------------------------------------------------
 
 // requestDefFromForm builds a RequestDefinition from POST form fields.
-// Authentication is global now — no auth fields are read here.
+// Authentication stays global; the form may carry one per-endpoint
+// Authorization override (authz_override) — empty or the [GLOBAL]
+// sentinel means "no override, use global auth".
 func requestDefFromForm(r *http.Request) model.RequestDefinition {
 	def := model.RequestDefinition{
 		ID:          strings.TrimSpace(r.FormValue("request_id")),
@@ -467,6 +558,13 @@ func requestDefFromForm(r *http.Request) model.RequestDefinition {
 		if def.Headers == nil {
 			def.Headers = map[string]string{"Content-Type": "application/json"}
 		}
+	}
+	// Per-endpoint Authorization override (sentinel or empty = global applies).
+	if ov := strings.TrimSpace(r.FormValue("authz_override")); ov != "" && ov != model.HeaderGlobalSentinel {
+		if def.Headers == nil {
+			def.Headers = map[string]string{}
+		}
+		def.Headers["Authorization"] = ov
 	}
 	return def
 }
@@ -494,16 +592,17 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 		return cfg, err
 	}
 
-	// Exactly one stop condition: soak uses Duration, everything else
-	// uses TotalRequests (the other field is ignored, never defaulted).
-	if cfg.Mode == model.ModeSoak {
-		raw := strings.TrimSpace(r.FormValue("soak_seconds"))
+	// Stop condition follows the mode: load and soak are duration-driven
+	// in the UI (they share the duration field); burst/auth-probe stay
+	// count-driven. The engine still accepts either for any mode.
+	if cfg.Mode == model.ModeLoad || cfg.Mode == model.ModeSoak {
+		raw := strings.TrimSpace(r.FormValue("duration_seconds"))
 		if raw == "" {
 			cfg.Duration = 30 * time.Second
 		} else {
 			secs, err := strconv.Atoi(raw)
 			if err != nil || secs <= 0 {
-				return cfg, fmt.Errorf("soak_seconds must be a positive integer")
+				return cfg, fmt.Errorf("duration_seconds must be a positive integer")
 			}
 			cfg.Duration = time.Duration(secs) * time.Second
 		}
