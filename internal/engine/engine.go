@@ -63,8 +63,13 @@ func percentileIdx(n, pct int) int {
 // ============================================================
 
 // EvaluateAssertions returns true if all configured assertions hold.
-// A TestConfig with no assertions set always passes.
+// Baseline rule: if 100% of requests failed (ErrorRate==1.0 and no successful
+// status codes recorded), it always returns false regardless of configured assertions.
 func EvaluateAssertions(a model.Assertions, s model.RunSummary) bool {
+	// Baseline: 100% failure is always a fail.
+	if s.ErrorRate >= 1.0 && len(s.StatusCounts) == 0 {
+		return false
+	}
 	// Error rate
 	if a.MaxErrorRate > 0 && s.ErrorRate > a.MaxErrorRate {
 		return false
@@ -86,6 +91,67 @@ func EvaluateAssertions(a model.Assertions, s model.RunSummary) bool {
 		}
 	}
 	return true
+}
+
+// DetermineOutcome returns the tri-state RunOutcome for a completed run.
+func DetermineOutcome(a model.Assertions, s model.RunSummary) model.RunOutcome {
+	// Baseline: 100% failure overrides everything.
+	if s.ErrorRate >= 1.0 && len(s.StatusCounts) == 0 {
+		return model.OutcomeFailNoRequests
+	}
+	// No assertions configured and at least one success → neutral.
+	hasAssertions := a.MaxErrorRate > 0 || a.MaxP95Millis > 0 || len(a.ExpectedStatus) > 0
+	if !hasAssertions {
+		return model.OutcomeNoAssertions
+	}
+	if EvaluateAssertions(a, s) {
+		return model.OutcomePass
+	}
+	return model.OutcomeFail
+}
+
+// ProbeResult is the outcome of a single test-connection request.
+type ProbeResult struct {
+	StatusCode  int    `json:"status_code"`
+	LatencyMs   int    `json:"latency_ms"`
+	BodyPreview string `json:"body_preview"`
+	OK          bool   `json:"ok"`
+	ErrMsg      string `json:"err_msg,omitempty"`
+}
+
+// applyAuth sets the Authorization headers on req from the global auth
+// config. Called at dispatch time so every mode uses current credentials.
+func applyAuth(req *http.Request, auth model.AuthConfig) {
+	switch auth.Type {
+	case model.AuthTypeBearer:
+		if auth.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+auth.Token)
+		}
+	case model.AuthTypeAPIKey:
+		if auth.Header != "" && auth.Value != "" {
+			req.Header.Set(auth.Header, auth.Value)
+		}
+	case model.AuthTypeBasic:
+		if auth.Username != "" || auth.Password != "" {
+			req.SetBasicAuth(auth.Username, auth.Password)
+		}
+	}
+}
+
+// Probe fires a single HTTP request and returns its result. It never returns
+// a Go error — transport failures are encoded in ProbeResult.OK/ErrMsg.
+func Probe(ctx context.Context, def model.RequestDefinition, auth model.AuthConfig) (ProbeResult, error) {
+	client := newClient(1)
+	r := execRequest(ctx, client, def, auth)
+	pr := ProbeResult{
+		StatusCode: r.statusCode,
+		LatencyMs:  int(r.latency.Milliseconds()),
+		OK:         r.err == nil && r.statusCode > 0,
+	}
+	if r.err != nil {
+		pr.ErrMsg = r.err.Error()
+	}
+	return pr, nil
 }
 
 // ============================================================
@@ -189,11 +255,25 @@ func feedBurst(ctx context.Context, jobs chan<- struct{}, total, burstCount, idl
 	}
 }
 
+// feedSoak sends job tokens continuously until ctx expires, then closes
+// the channel. Used by RunSoak for deadline-based dispatch.
+func feedSoak(ctx context.Context, jobs chan<- struct{}) {
+	defer close(jobs)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case jobs <- struct{}{}:
+		}
+	}
+}
+
 // runWorkers launches concurrency workers, each pulling from jobs and sending
 // results to results. Closes results when all workers finish.
 func runWorkers(
 	ctx context.Context,
 	req model.RequestDefinition,
+	auth model.AuthConfig,
 	jobs <-chan struct{},
 	results chan<- result,
 	concurrency int,
@@ -208,7 +288,7 @@ func runWorkers(
 				if ctx.Err() != nil {
 					return
 				}
-				r := execRequest(ctx, client, req)
+				r := execRequest(ctx, client, req, auth)
 				select {
 				case results <- r:
 				case <-ctx.Done():
@@ -224,7 +304,7 @@ func runWorkers(
 }
 
 // execRequest builds and fires one HTTP request, returning a result.
-func execRequest(ctx context.Context, client *http.Client, def model.RequestDefinition) result {
+func execRequest(ctx context.Context, client *http.Client, def model.RequestDefinition, auth model.AuthConfig) result {
 	url := def.URLTemplate
 	// Resolve dynamic query params into URL query string
 	if len(def.QueryParams) > 0 {
@@ -264,19 +344,8 @@ func execRequest(ctx context.Context, client *http.Client, def model.RequestDefi
 		return result{err: err}
 	}
 
-	// Auth headers
-	if def.Auth != nil {
-		switch def.Auth.Type {
-		case model.AuthTypeBearer:
-			if def.Auth.Token != "" {
-				req.Header.Set("Authorization", "Bearer "+def.Auth.Token)
-			}
-		case model.AuthTypeAPIKey:
-			if def.Auth.Header != "" && def.Auth.Value != "" {
-				req.Header.Set(def.Auth.Header, def.Auth.Value)
-			}
-		}
-	}
+	// Global auth, applied at dispatch time.
+	applyAuth(req, auth)
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -333,13 +402,15 @@ func aggregate(results <-chan result, assertions model.Assertions, start time.Ti
 
 // buildRun assembles the final Run from a summary.
 func buildRun(cfg model.TestConfig, summary model.RunSummary, startedAt, finishedAt time.Time) model.Run {
+	outcome := DetermineOutcome(cfg.Assertions, summary)
 	return model.Run{
 		ID:           fmt.Sprintf("run-%d", startedAt.UnixNano()),
 		TestConfigID: cfg.ID,
 		StartedAt:    startedAt,
 		FinishedAt:   finishedAt,
 		Summary:      summary,
-		Passed:       EvaluateAssertions(cfg.Assertions, summary),
+		Outcome:      outcome,
+		Passed:       outcome == model.OutcomePass,
 	}
 }
 
@@ -349,14 +420,14 @@ func buildRun(cfg model.TestConfig, summary model.RunSummary, startedAt, finishe
 
 // RunLoad executes a load test: cfg.Concurrency workers drain cfg.TotalRequests
 // jobs as fast as possible, then returns the aggregated Run.
-func RunLoad(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig) (model.Run, error) {
+func RunLoad(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
 	client := newClient(cfg.Concurrency)
 	jobs := make(chan struct{}, cfg.Concurrency)
 	results := make(chan result, cfg.Concurrency)
 
 	startedAt := time.Now()
 	go feedJobs(ctx, jobs, cfg.TotalRequests)
-	runWorkers(ctx, req, jobs, results, cfg.Concurrency, client)
+	runWorkers(ctx, req, auth, jobs, results, cfg.Concurrency, client)
 
 	summary := aggregate(results, cfg.Assertions, startedAt)
 	finishedAt := time.Now()
@@ -369,9 +440,9 @@ func RunLoad(ctx context.Context, req model.RequestDefinition, cfg model.TestCon
 
 // RunBurst executes a burst test: jobs are released in pulses per
 // cfg.BurstPattern.Count with cfg.BurstPattern.Idle ms between bursts.
-func RunBurst(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig) (model.Run, error) {
+func RunBurst(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
 	if cfg.BurstPattern == nil {
-		return RunLoad(ctx, req, cfg)
+		return RunLoad(ctx, req, cfg, auth)
 	}
 	client := newClient(cfg.Concurrency)
 	jobs := make(chan struct{}, cfg.BurstPattern.Count)
@@ -379,7 +450,31 @@ func RunBurst(ctx context.Context, req model.RequestDefinition, cfg model.TestCo
 
 	startedAt := time.Now()
 	go feedBurst(ctx, jobs, cfg.TotalRequests, cfg.BurstPattern.Count, cfg.BurstPattern.Idle)
-	runWorkers(ctx, req, jobs, results, cfg.Concurrency, client)
+	runWorkers(ctx, req, auth, jobs, results, cfg.Concurrency, client)
+
+	summary := aggregate(results, cfg.Assertions, startedAt)
+	finishedAt := time.Now()
+	return buildRun(cfg, summary, startedAt, finishedAt), nil
+}
+
+// ============================================================
+// RunSoak
+// ============================================================
+
+// RunSoak executes a soak test: cfg.Concurrency workers fire requests
+// continuously until cfg.Duration elapses, then returns the aggregated Run.
+// Unlike RunLoad/RunBurst it is bounded by a deadline, not a fixed count.
+func RunSoak(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
+	deadlineCtx, cancel := context.WithDeadline(ctx, time.Now().Add(cfg.Duration))
+	defer cancel()
+
+	client := newClient(cfg.Concurrency)
+	jobs := make(chan struct{}, cfg.Concurrency)
+	results := make(chan result, cfg.Concurrency)
+
+	startedAt := time.Now()
+	go feedSoak(deadlineCtx, jobs)
+	runWorkers(deadlineCtx, req, auth, jobs, results, cfg.Concurrency, client)
 
 	summary := aggregate(results, cfg.Assertions, startedAt)
 	finishedAt := time.Now()

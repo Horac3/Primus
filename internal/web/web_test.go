@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -30,112 +31,188 @@ func newTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// minimalSpec returns a tiny OpenAPI 3.0 JSON spec as a string.
-func minimalSpec() string {
-	return `{
-		"openapi":"3.0.0",
-		"info":{"title":"T","version":"1"},
-		"paths":{
-			"/health":{
-				"get":{
-					"operationId":"getHealth",
-					"responses":{"200":{"description":"ok"}}
-				}
-			}
-		}
-	}`
-}
-
 // ============================================================
-// POST /import — valid spec URL
+// POST /probe — success path
 // ============================================================
 
-func TestImportHandler_ValidURL_PersistsDefinitions(t *testing.T) {
-	// Arrange — stand up a spec server
-	specSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(minimalSpec()))
-	}))
-	defer specSrv.Close()
-
-	db := newTestDB(t)
-	mux := web.NewServer(db)
-
-	form := url.Values{"spec_url": {specSrv.URL + "/spec.json"}}
-	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
-
-	// Act
-	mux.ServeHTTP(rr, req)
-
-	// Assert — non-error response
-	if rr.Code >= 500 {
-		t.Errorf("status = %d, want < 500; body: %s", rr.Code, rr.Body.String())
-	}
-	// Definitions must be persisted
-	defs, err := store.ListRequestDefinitions(db)
-	if err != nil {
-		t.Fatalf("ListRequestDefinitions: %v", err)
-	}
-	if len(defs) == 0 {
-		t.Error("expected at least 1 RequestDefinition persisted, got 0")
-	}
-}
-
-// ============================================================
-// POST /import — malformed URL returns clear error
-// ============================================================
-
-func TestImportHandler_MalformedURL_Returns4xx(t *testing.T) {
+func TestProbeHandler_SuccessfulTarget_ReturnsStatusAndOK(t *testing.T) {
 	// Arrange
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer targetSrv.Close()
+
 	db := newTestDB(t)
 	mux := web.NewServer(db)
 
-	form := url.Values{"spec_url": {"not-a-valid-url-%%"}}
-	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(form.Encode()))
+	form := url.Values{
+		"method": {"GET"},
+		"url":    {targetSrv.URL + "/ok"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
 
 	// Act
 	mux.ServeHTTP(rr, req)
 
-	// Assert — should get a 4xx, not a 500
-	if rr.Code == http.StatusOK {
-		t.Errorf("expected error status, got 200")
-	}
+	// Assert
 	if rr.Code >= 500 {
-		t.Errorf("expected 4xx, got %d; body: %s", rr.Code, rr.Body.String())
+		t.Fatalf("status = %d, want < 500; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "200") {
+		t.Errorf("response body does not contain status code 200; body: %s", body)
 	}
 }
 
 // ============================================================
-// POST /runs — valid config persists Run with correct Passed
+// POST /probe — unreachable target returns clear failure, not 500
 // ============================================================
 
-func TestRunsHandler_ValidConfig_PersistsRun(t *testing.T) {
-	// Arrange — target server that always responds 200
+func TestProbeHandler_UnreachableTarget_Returns2xxWithFailureState(t *testing.T) {
+	// Arrange — closed server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	badURL := srv.URL + "/gone"
+	srv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{"method": {"GET"}, "url": {badURL}}
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — must return a renderable fragment (2xx), not a 500
+	if rr.Code >= 500 {
+		t.Errorf("status = %d, want 2xx for unreachable target; body: %s", rr.Code, rr.Body.String())
+	}
+	// Fragment must indicate failure
+	body := rr.Body.String()
+	if !strings.Contains(strings.ToLower(body), "fail") && !strings.Contains(strings.ToLower(body), "error") {
+		t.Errorf("response does not indicate failure; body: %s", body)
+	}
+}
+
+// ============================================================
+// POST /runs — 100% failing requests + zero assertions → Passed=false
+// ============================================================
+
+func TestRunsHandler_AllFailed_ZeroAssertions_RunPassedFalse(t *testing.T) {
+	// Arrange — server always returns 500
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":         {"GET"},
+		"url":            {targetSrv.URL + "/fail"},
+		"mode":           {"load"},
+		"concurrency":    {"2"},
+		"total_requests": {"4"},
+		// no expected_status, no assertions
+	}
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — non-server-error response
+	if rr.Code >= 500 {
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	// Retrieve persisted run and check Passed=false and OutcomeFailNoRequests
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(runs) == 0 {
+		t.Fatal("no runs persisted")
+	}
+	r := runs[0]
+	if r.Passed {
+		t.Errorf("Passed = true, want false (no assertions configured = never a green PASS)")
+	}
+	// With no assertions and valid HTTP responses (even 500s), outcome is NoAssertions (neutral).
+	// OutcomeFail/FailNoRequests only triggers on transport errors or configured assertion failures.
+	if r.Outcome == model.OutcomePass {
+		t.Errorf("Outcome = %q, want anything but Pass when no assertions configured", r.Outcome)
+	}
+}
+
+// ============================================================
+// POST /runs — zero assertions, partial success → OutcomeNoAssertions
+// ============================================================
+
+func TestRunsHandler_ZeroAssertions_SomeSuccess_OutcomeNoAssertions(t *testing.T) {
+	// Arrange — server returns 200
 	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer targetSrv.Close()
 
 	db := newTestDB(t)
-	// Pre-save a request definition pointing at the test server
-	reqDef := model.RequestDefinition{
-		ID:          "req-web-1",
-		Name:        "Health",
-		Method:      "GET",
-		URLTemplate: targetSrv.URL + "/health",
-	}
-	if err := store.SaveRequestDefinition(db, reqDef); err != nil {
-		t.Fatalf("SaveRequestDefinition: %v", err)
-	}
-
 	mux := web.NewServer(db)
 
 	form := url.Values{
-		"request_id":      {"req-web-1"},
+		"method":         {"GET"},
+		"url":            {targetSrv.URL + "/ok"},
+		"mode":           {"load"},
+		"concurrency":    {"2"},
+		"total_requests": {"4"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert
+	if rr.Code >= 500 {
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	runs, _ := store.ListAllRuns(db)
+	if len(runs) == 0 {
+		t.Fatal("no runs persisted")
+	}
+	r := runs[0]
+	if r.Outcome != model.OutcomeNoAssertions {
+		t.Errorf("Outcome = %q, want %q", r.Outcome, model.OutcomeNoAssertions)
+	}
+	if r.Passed {
+		t.Errorf("Passed = true, want false for no-assertions outcome")
+	}
+}
+
+// ============================================================
+// POST /runs — configured assertions met → OutcomePass
+// ============================================================
+
+func TestRunsHandler_AssertionsMet_OutcomePass(t *testing.T) {
+	// Arrange
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":          {"GET"},
+		"url":             {targetSrv.URL + "/ok"},
 		"mode":            {"load"},
 		"concurrency":     {"2"},
 		"total_requests":  {"4"},
@@ -148,25 +225,25 @@ func TestRunsHandler_ValidConfig_PersistsRun(t *testing.T) {
 	// Act
 	mux.ServeHTTP(rr, req)
 
-	// Assert — non-error response
+	// Assert
 	if rr.Code >= 500 {
-		t.Errorf("status = %d, want < 500; body: %s", rr.Code, rr.Body.String())
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
 	}
-	// Run must be persisted and passed (all 200s, assertion is 200)
-	runs, err := store.ListAllRuns(db)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
+	runs, _ := store.ListAllRuns(db)
 	if len(runs) == 0 {
-		t.Fatal("expected at least 1 Run persisted")
+		t.Fatal("no runs persisted")
 	}
-	if !runs[0].Passed {
-		t.Errorf("run.Passed = false, want true (all responses were 200)")
+	r := runs[0]
+	if r.Outcome != model.OutcomePass {
+		t.Errorf("Outcome = %q, want %q", r.Outcome, model.OutcomePass)
+	}
+	if !r.Passed {
+		t.Errorf("Passed = false, want true when assertions met")
 	}
 }
 
 // ============================================================
-// GET /runs/{id} — 404 for unknown, 200 for known
+// GET /runs/{id} — 404 unknown, 200 known
 // ============================================================
 
 func TestGetRunHandler_UnknownID_Returns404(t *testing.T) {
@@ -196,6 +273,7 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 		StartedAt:    now,
 		FinishedAt:   now.Add(time.Second),
 		Summary:      model.RunSummary{StatusCounts: map[int]int{200: 10}},
+		Outcome:      model.OutcomePass,
 		Passed:       true,
 	}
 	if err := store.SaveRun(db, run); err != nil {
@@ -214,6 +292,324 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 		t.Errorf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
 	}
 	if !strings.Contains(rr.Body.String(), "run-known") {
-		t.Errorf("response body does not contain run ID; body: %s", rr.Body.String())
+		t.Errorf("body does not contain run ID; body: %s", rr.Body.String())
 	}
 }
+
+// ============================================================
+// GET /history-fragment
+// ============================================================
+
+func TestHistoryFragmentHandler_Returns200(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/history-fragment", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ============================================================
+// POST /auth + GET /auth-fragment — global auth round-trip
+// ============================================================
+
+func TestAuthHandler_SaveAndRenderMasked(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"auth_type":  {"bearer"},
+		"auth_token": {"tok-1234"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — fragment renders, secret masked but identifiable
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "tok-1234") {
+		t.Errorf("fragment leaks full token; body: %s", body)
+	}
+	if !strings.Contains(body, "1234") {
+		t.Errorf("fragment does not show token suffix; body: %s", body)
+	}
+
+	// Persisted — and a second save keeps a single row
+	saved, err := store.GetGlobalAuth(db)
+	if err != nil {
+		t.Fatalf("GetGlobalAuth: %v", err)
+	}
+	if saved.Type != model.AuthTypeBearer || saved.Token != "tok-1234" {
+		t.Errorf("saved = %+v, want bearer tok-1234", saved)
+	}
+
+	// GET /auth-fragment shows the same state
+	req2 := httptest.NewRequest(http.MethodGet, "/auth-fragment", nil)
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("auth-fragment status = %d, want 200", rr2.Code)
+	}
+	if !strings.Contains(rr2.Body.String(), "1234") {
+		t.Errorf("auth-fragment missing saved state; body: %s", rr2.Body.String())
+	}
+}
+
+// ============================================================
+// GET /sidebar-fragment — lists every endpoint
+// ============================================================
+
+func TestSidebarFragment_ListsEndpoints(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	for _, d := range []model.RequestDefinition{
+		{ID: "ep-1", Name: "Get Pet", Method: "GET", URLTemplate: "https://x.com/pet/{id}"},
+		{ID: "ep-2", Name: "Add Pet", Method: "POST", URLTemplate: "https://x.com/pet"},
+	} {
+		if err := store.SaveRequestDefinition(db, d); err != nil {
+			t.Fatalf("SaveRequestDefinition: %v", err)
+		}
+	}
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/sidebar-fragment", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — one row per endpoint, method + path visible
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"Get Pet", "GET", "/pet/{id}", "Add Pet", "POST"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("sidebar missing %q; body: %s", want, body)
+		}
+	}
+}
+
+// ============================================================
+// GET /requests/{id} — pre-filled builder, no auth field
+// ============================================================
+
+func TestRequestsHandler_PrefilledPanel_HasNoAuthField(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	def := model.RequestDefinition{
+		ID: "ep-9", Name: "Find Pets", Method: "GET",
+		URLTemplate: "https://x.com/find",
+		Body:        &model.BodyTemplate{Raw: []byte(`{"a":1}`)},
+	}
+	if err := store.SaveRequestDefinition(db, def); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/requests/ep-9", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — pre-filled, auth lives in the global bar now
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"https://x.com/find", "ep-9", "Test connection"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("panel missing %q; body: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "auth_type") {
+		t.Errorf("panel must not contain a per-endpoint auth field; body: %s", body)
+	}
+}
+
+func TestRequestsHandler_New_ReturnsBlankPanel(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/requests/new", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Test connection") {
+		t.Errorf("blank panel missing builder; body: %s", rr.Body.String())
+	}
+}
+
+func TestRequestsHandler_UnknownID_Returns404(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/requests/nope", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// ============================================================
+// POST /probe uses global auth — no re-entering per endpoint
+// ============================================================
+
+func TestProbeHandler_UsesGlobalAuthAutomatically(t *testing.T) {
+	// Arrange — target requires the bearer header; form carries no auth
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer shared-tok" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	if err := store.SaveGlobalAuth(db, model.AuthConfig{Type: model.AuthTypeBearer, Token: "shared-tok"}); err != nil {
+		t.Fatalf("SaveGlobalAuth: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	form := url.Values{"method": {"GET"}, "url": {targetSrv.URL + "/x"}}
+	req := httptest.NewRequest(http.MethodPost, "/probe", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — 200 Connected proves global auth was attached
+	if rr.Code >= 500 {
+		t.Fatalf("status = %d, want < 500; body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "200") {
+		t.Errorf("probe did not authenticate (want 200); body: %s", rr.Body.String())
+	}
+}
+
+// ============================================================
+// POST /runs — soak mode dispatches RunSoak, persists the run
+// ============================================================
+
+func TestRunsHandler_SoakMode_PersistsRun(t *testing.T) {
+	// Arrange
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{
+		"method":       {"GET"},
+		"url":          {targetSrv.URL + "/soak"},
+		"mode":         {"soak"},
+		"concurrency":  {"2"},
+		"soak_seconds": {"1"},
+		"expected_status": {"200"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert
+	if rr.Code >= 500 {
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	if runs[0].Outcome != model.OutcomePass || !runs[0].Passed {
+		t.Errorf("Outcome = %q Passed = %v, want pass/true", runs[0].Outcome, runs[0].Passed)
+	}
+	if len(runs[0].Summary.StatusCounts) == 0 {
+		t.Error("soak run recorded no requests")
+	}
+}
+
+// ============================================================
+// POST /import — sidebar refresh + first endpoint in main panel
+// ============================================================
+
+func TestImportHandler_URLSpec_RefreshesSidebarAndLoadsFirst(t *testing.T) {
+	// Arrange — spec served locally, no real network
+	spec := `{"openapi":"3.0.0","info":{"title":"T","version":"1"},
+		"paths":{"/pets":{"get":{"operationId":"listPets","responses":{"200":{"description":"ok"}}}}}}`
+	specSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(spec))
+	}))
+	defer specSrv.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	form := url.Values{"spec_url": {specSrv.URL + "/spec.json"}}
+	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — sidebar lists the endpoint, OOB swap loads it into the main panel
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "listPets") {
+		t.Errorf("response missing imported endpoint; body: %s", body)
+	}
+	if !strings.Contains(body, "hx-swap-oob") {
+		t.Errorf("response missing OOB main-panel swap; body: %s", body)
+	}
+	defs, err := store.ListRequestDefinitions(db)
+	if err != nil {
+		t.Fatalf("ListRequestDefinitions: %v", err)
+	}
+	if len(defs) != 1 || defs[0].ID != "listPets" {
+		t.Errorf("stored defs = %+v, want [listPets]", defs)
+	}
+}
+
+// keep JSON import for compile check
+var _ = json.Marshal

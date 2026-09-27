@@ -9,15 +9,20 @@ const (
 	AuthTypeNone         AuthType = "none"
 	AuthTypeBearer       AuthType = "bearer"
 	AuthTypeAPIKey       AuthType = "api_key"
+	AuthTypeBasic        AuthType = "basic"
 	AuthTypeLoginChained AuthType = "login_chained"
 )
 
-// AuthConfig holds authentication parameters for a request.
+// AuthConfig holds the single global authentication configuration.
+// It is stored once (store.GetGlobalAuth/SaveGlobalAuth) and applied to
+// every dispatched request — it is not a property of an endpoint.
 type AuthConfig struct {
-	Type   AuthType `json:"type"`
-	Token  string   `json:"token,omitempty"`
-	Header string   `json:"header,omitempty"` // e.g. "X-API-Key"
-	Value  string   `json:"value,omitempty"`  // api-key value
+	Type     AuthType `json:"type"`
+	Token    string   `json:"token,omitempty"`
+	Header   string   `json:"header,omitempty"` // e.g. "X-API-Key"
+	Value    string   `json:"value,omitempty"`  // api-key value
+	Username string   `json:"username,omitempty"`
+	Password string   `json:"password,omitempty"`
 	// LoginChained: reference to another RequestDefinition ID whose
 	// response supplies the bearer token for this request.
 	LoginRequestID string `json:"login_request_id,omitempty"`
@@ -58,6 +63,7 @@ type ParamSpec struct {
 }
 
 // RequestDefinition is a reusable template for an HTTP request.
+// Authentication is global (see AuthConfig) and intentionally not stored here.
 type RequestDefinition struct {
 	ID          string               `json:"id"`
 	Name        string               `json:"name"`
@@ -66,7 +72,6 @@ type RequestDefinition struct {
 	Headers     map[string]string    `json:"headers,omitempty"`
 	QueryParams map[string]ParamSpec `json:"query_params,omitempty"`
 	Body        *BodyTemplate        `json:"body,omitempty"`
-	Auth        *AuthConfig          `json:"auth,omitempty"`
 }
 
 // Mode is the type of test to run.
@@ -76,6 +81,7 @@ const (
 	ModeLoad      Mode = "load"
 	ModeBurst     Mode = "burst"
 	ModeAuthProbe Mode = "auth_probe"
+	ModeSoak      Mode = "soak"
 )
 
 // BurstPattern describes the shape of a burst test.
@@ -92,12 +98,14 @@ type Assertions struct {
 }
 
 // TestConfig is a parameterised test to execute against a RequestDefinition.
+// Duration is used only when Mode == "soak"; load/burst use TotalRequests.
 type TestConfig struct {
 	ID            string        `json:"id"`
 	RequestID     string        `json:"request_id"`
 	Mode          Mode          `json:"mode"`
 	Concurrency   int           `json:"concurrency"`
 	TotalRequests int           `json:"total_requests"`
+	Duration      time.Duration `json:"duration,omitempty"`
 	BurstPattern  *BurstPattern `json:"burst_pattern,omitempty"`
 	Assertions    Assertions    `json:"assertions"`
 }
@@ -112,6 +120,22 @@ type RunSummary struct {
 	ErrorRate    float64     `json:"error_rate"`
 }
 
+// RunOutcome is the tri-state result of a Run.
+type RunOutcome string
+
+const (
+	// OutcomePass — all configured assertions met.
+	OutcomePass RunOutcome = "pass"
+	// OutcomeFail — at least one configured assertion failed.
+	OutcomeFail RunOutcome = "fail"
+	// OutcomeFailNoRequests — 100% of requests failed (transport or unexpected status);
+	// applies even when no assertions are configured.
+	OutcomeFailNoRequests RunOutcome = "fail_no_requests"
+	// OutcomeNoAssertions — run completed with ≥1 success but no assertions were configured,
+	// so pass/fail is indeterminate (neutral).
+	OutcomeNoAssertions RunOutcome = "no_assertions"
+)
+
 // Run is a single execution of a TestConfig.
 type Run struct {
 	ID           string     `json:"id"`
@@ -119,5 +143,6 @@ type Run struct {
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   time.Time  `json:"finished_at"`
 	Summary      RunSummary `json:"summary"`
+	Outcome      RunOutcome `json:"outcome"`
 	Passed       bool       `json:"passed"`
 }

@@ -1,0 +1,25 @@
+{{- /* run-result-fragment.html — htmx fragment returned by POST /runs */ -}}
+<div class="card">
+  <p style="margin-bottom:.5rem">
+    <span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span>
+    &nbsp;<span class="muted">Run <a href="/runs/{{.ID}}" style="color:#3b82d4">{{.ID}}</a></span>
+  </p>
+  <table>
+    <tr><th>P50</th><td>{{.Summary.P50Millis}} ms</td>
+        <th>P95</th><td>{{.Summary.P95Millis}} ms</td>
+        <th>P99</th><td>{{.Summary.P99Millis}} ms</td></tr>
+    <tr><th>Errors</th><td>{{.Summary.ErrorCount}}</td>
+        <th>Error rate</th><td>{{printf "%.1f%%" (mul .Summary.ErrorRate 100.0)}}</td>
+        <th></th><td></td></tr>
+  </table>
+  {{if .Summary.StatusCounts}}
+  <table style="margin-top:.5rem">
+    <thead><tr><th>Status</th><th>Count</th></tr></thead>
+    <tbody>
+    {{range $code,$count := .Summary.StatusCounts}}
+    <tr><td>{{$code}}</td><td>{{$count}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</div>

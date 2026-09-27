@@ -20,7 +20,6 @@ func TestRequestDefinition_JSONRoundTrip(t *testing.T) {
 			"trace": {Static: strPtr("abc")},
 		},
 		Body: &model.BodyTemplate{Raw: []byte(`{"user":"test"}`)},
-		Auth: &model.AuthConfig{Type: model.AuthTypeBearer, Token: "tok"},
 	}
 
 	// Act
@@ -48,9 +47,6 @@ func TestRequestDefinition_JSONRoundTrip(t *testing.T) {
 	}
 	if got.Headers["Content-Type"] != orig.Headers["Content-Type"] {
 		t.Errorf("Headers: got %v, want %v", got.Headers, orig.Headers)
-	}
-	if got.Auth == nil || got.Auth.Token != orig.Auth.Token {
-		t.Errorf("Auth.Token: got %v, want %v", got.Auth, orig.Auth)
 	}
 }
 
@@ -123,6 +119,56 @@ func TestTestConfig_JSONRoundTrip(t *testing.T) {
 	}
 	if len(got.Assertions.ExpectedStatus) != 2 {
 		t.Errorf("ExpectedStatus len: got %d, want 2", len(got.Assertions.ExpectedStatus))
+	}
+}
+
+func TestTestConfig_SoakMode_DurationRoundTrip(t *testing.T) {
+	// Arrange
+	orig := model.TestConfig{
+		ID:            "cfg-soak",
+		RequestID:     "req-1",
+		Mode:          model.ModeSoak,
+		Concurrency:   3,
+		Duration:      90 * time.Second,
+		Assertions:    model.Assertions{ExpectedStatus: []int{200}},
+	}
+
+	// Act
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got model.TestConfig
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Assert
+	if got.Mode != model.ModeSoak {
+		t.Errorf("Mode: got %q, want %q", got.Mode, model.ModeSoak)
+	}
+	if got.Duration != orig.Duration {
+		t.Errorf("Duration: got %v, want %v", got.Duration, orig.Duration)
+	}
+}
+
+func TestAuthConfig_BasicRoundTrip(t *testing.T) {
+	// Arrange
+	orig := model.AuthConfig{Type: model.AuthTypeBasic, Username: "u", Password: "p"}
+
+	// Act
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got model.AuthConfig
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Assert
+	if got.Type != model.AuthTypeBasic || got.Username != "u" || got.Password != "p" {
+		t.Errorf("got %+v, want basic u/p", got)
 	}
 }
 

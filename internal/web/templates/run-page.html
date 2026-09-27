@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Run {{.ID}} — Primus</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:system-ui,"Segoe UI",sans-serif; max-width:720px; margin:2rem auto; padding:0 1rem; color:#1f2328; font-size:14px; line-height:1.6; }
+h1 { font-size:1.3rem; margin-bottom:.5rem; }
+.badge-pass    { background:#d1fae5; color:#065f46; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+.badge-fail    { background:#fee2e2; color:#991b1b; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+.badge-neutral { background:#e0f2fe; color:#0c4a6e; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+table { border-collapse:collapse; width:100%; font-size:.88rem; margin-top:.5rem; }
+th, td { text-align:left; padding:.35rem .6rem; border-bottom:1px solid #e5e7eb; }
+th { background:#f7f8fa; }
+.muted { color:#57606a; font-size:.85rem; }
+a { color:#3b82d4; text-decoration:none; }
+section { margin-top:1.25rem; }
+h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.4rem; border-bottom:1px solid #e5e7eb; padding-bottom:.2rem; }
+</style>
+</head>
+<body>
+<p class="muted" style="margin-bottom:1rem"><a href="/">← Back</a></p>
+<h1>Run result</h1>
+<p class="muted">{{.ID}} &middot; config: {{.TestConfigID}}</p>
+<p class="muted">{{.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</p>
+
+<p style="margin-top:.75rem">
+  <span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span>
+</p>
+
+<section>
+<h2>Latency</h2>
+<table>
+  <tr><th>P50</th><td>{{.Summary.P50Millis}} ms</td></tr>
+  <tr><th>P95</th><td>{{.Summary.P95Millis}} ms</td></tr>
+  <tr><th>P99</th><td>{{.Summary.P99Millis}} ms</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Status codes</h2>
+<table>
+  <thead><tr><th>Code</th><th>Count</th></tr></thead>
+  <tbody>
+  {{range $code,$count := .Summary.StatusCounts}}
+  <tr><td>{{$code}}</td><td>{{$count}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</section>
+
+<section>
+<h2>Errors</h2>
+<table>
+  <tr><th>Error count</th><td>{{.Summary.ErrorCount}}</td></tr>
+  <tr><th>Error rate</th><td>{{printf "%.2f%%" (mul .Summary.ErrorRate 100.0)}}</td></tr>
+</table>
+</section>
+</body>
+</html>

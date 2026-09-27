@@ -57,7 +57,7 @@ func TestMigrate_CreatesTablesOnFreshDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate returned error: %v", err)
 	}
-	for _, table := range []string{"requests", "test_configs", "runs"} {
+	for _, table := range []string{"requests", "test_configs", "runs", "global_auth"} {
 		var name string
 		row := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table)
 		if err := row.Scan(&name); err != nil {
@@ -151,6 +151,97 @@ func TestListRequestDefinitions(t *testing.T) {
 	}
 	if len(list) != 3 {
 		t.Errorf("len: got %d, want 3", len(list))
+	}
+}
+
+// ---- GlobalAuth ------------------------------------------------------------
+
+func TestGetGlobalAuth_EmptyDB_ReturnsZeroAuth(t *testing.T) {
+	// Arrange
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Act
+	got, err := store.GetGlobalAuth(db)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("GetGlobalAuth: %v", err)
+	}
+	if got.Type != "" && got.Type != model.AuthTypeNone {
+		t.Errorf("Type: got %q, want zero/none", got.Type)
+	}
+}
+
+func TestSaveAndGetGlobalAuth_RoundTrips(t *testing.T) {
+	cases := []model.AuthConfig{
+		{Type: model.AuthTypeNone},
+		{Type: model.AuthTypeBearer, Token: "tok-123"},
+		{Type: model.AuthTypeAPIKey, Header: "X-API-Key", Value: "key-abc"},
+		{Type: model.AuthTypeBasic, Username: "u", Password: "p"},
+	}
+	for _, want := range cases {
+		t.Run(string(want.Type), func(t *testing.T) {
+			// Arrange
+			db, cleanup := tempDB(t)
+			defer cleanup()
+			if err := store.Migrate(db); err != nil {
+				t.Fatalf("Migrate: %v", err)
+			}
+
+			// Act
+			if err := store.SaveGlobalAuth(db, want); err != nil {
+				t.Fatalf("SaveGlobalAuth: %v", err)
+			}
+			got, err := store.GetGlobalAuth(db)
+			if err != nil {
+				t.Fatalf("GetGlobalAuth: %v", err)
+			}
+
+			// Assert
+			if got != want {
+				t.Errorf("got %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestSaveGlobalAuth_Upsert_KeepsSingleRow(t *testing.T) {
+	// Arrange
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Act — save three times with different values
+	for _, a := range []model.AuthConfig{
+		{Type: model.AuthTypeBearer, Token: "first"},
+		{Type: model.AuthTypeAPIKey, Header: "X-K", Value: "second"},
+		{Type: model.AuthTypeBasic, Username: "u", Password: "third"},
+	} {
+		if err := store.SaveGlobalAuth(db, a); err != nil {
+			t.Fatalf("SaveGlobalAuth: %v", err)
+		}
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM global_auth`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	// Assert — exactly one row, holding the last value
+	if count != 1 {
+		t.Errorf("row count = %d, want 1", count)
+	}
+	got, err := store.GetGlobalAuth(db)
+	if err != nil {
+		t.Fatalf("GetGlobalAuth: %v", err)
+	}
+	if got.Type != model.AuthTypeBasic || got.Password != "third" {
+		t.Errorf("got %+v, want last-saved basic auth", got)
 	}
 }
 

@@ -1,0 +1,21 @@
+{{- /* history-fragment.html — htmx fragment returned by GET /history-fragment */ -}}
+{{if .}}
+<table>
+  <thead>
+    <tr><th>ID</th><th>Config</th><th>Started</th><th>P95 ms</th><th>Result</th></tr>
+  </thead>
+  <tbody>
+  {{range .}}
+  <tr>
+    <td><a href="/runs/{{.ID}}" style="color:#3b82d4;font-size:.85rem">{{.ID}}</a></td>
+    <td style="color:#57606a;font-size:.82rem">{{.TestConfigID}}</td>
+    <td style="color:#57606a;font-size:.82rem">{{.StartedAt.Format "2006-01-02 15:04"}}</td>
+    <td>{{.Summary.P95Millis}}</td>
+    <td><span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span></td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p style="color:#57606a;font-size:.88rem">No runs yet.</p>
+{{end}}

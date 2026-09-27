@@ -1,0 +1,10 @@
+{{- /* probe-result.html — htmx fragment returned by POST /probe */ -}}
+<div class="card" style="margin-top:.5rem">
+  {{if .OK}}
+  <p><strong style="color:#065f46">✓ Connected</strong> &nbsp; HTTP {{.StatusCode}} &nbsp; <span class="muted">{{.LatencyMs}} ms</span></p>
+  {{else}}
+  <p><strong style="color:#991b1b">✗ Failed to connect</strong></p>
+  {{if .ErrMsg}}<p class="muted" style="font-size:.82rem;margin-top:.25rem">{{.ErrMsg}}</p>{{end}}
+  {{if .StatusCode}}<p class="muted" style="font-size:.82rem">HTTP {{.StatusCode}}</p>{{end}}
+  {{end}}
+</div>

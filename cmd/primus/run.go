@@ -42,13 +42,22 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		return 2
 	}
 
+	// Global auth, applied to every dispatched request.
+	auth, err := store.GetGlobalAuth(db)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "primus run: load global auth: %v\n", err)
+		return 2
+	}
+
 	// Execute the run using the same engine as the web handler.
 	var run model.Run
 	switch cfg.Mode {
 	case model.ModeBurst:
-		run, err = engine.RunBurst(ctx, reqDef, cfg)
+		run, err = engine.RunBurst(ctx, reqDef, cfg, auth)
+	case model.ModeSoak:
+		run, err = engine.RunSoak(ctx, reqDef, cfg, auth)
 	default:
-		run, err = engine.RunLoad(ctx, reqDef, cfg)
+		run, err = engine.RunLoad(ctx, reqDef, cfg, auth)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "primus run: engine error: %v\n", err)

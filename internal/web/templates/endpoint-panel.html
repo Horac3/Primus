@@ -1,0 +1,88 @@
+{{- /* endpoint-panel.html — main-panel fragment: builder + probe + mode run form */ -}}
+<h2>{{if .IsNew}}New endpoint{{else}}{{.Def.Name}}{{end}}</h2>
+<p class="muted" style="margin-bottom:.5rem">
+  {{if .IsNew}}Define the request, then test it — auth applies automatically from the top bar.
+  {{else}}<span class="method">{{.Def.Method}}</span> {{.Def.URLTemplate}}{{end}}
+</p>
+
+<form id="panel-form" hx-post="/runs" hx-target="#results" hx-swap="innerHTML" hx-indicator="#run-spinner">
+  {{if not .IsNew}}<input type="hidden" name="request_id" value="{{.Def.ID}}">{{end}}
+  <h2>Request</h2>
+  <div class="row" style="margin-bottom:.5rem">
+    <label style="flex:0 0 100px">
+      <span>Method</span>
+      <select name="method">
+        <option {{if eq .Def.Method "GET"}}selected{{end}}>GET</option>
+        <option {{if eq .Def.Method "POST"}}selected{{end}}>POST</option>
+        <option {{if eq .Def.Method "PUT"}}selected{{end}}>PUT</option>
+        <option {{if eq .Def.Method "PATCH"}}selected{{end}}>PATCH</option>
+        <option {{if eq .Def.Method "DELETE"}}selected{{end}}>DELETE</option>
+      </select>
+    </label>
+    <label style="flex:1 1 auto">
+      <span>URL</span>
+      <input type="url" name="url" value="{{.Def.URLTemplate}}" placeholder="https://api.example.com/endpoint" required>
+    </label>
+  </div>
+
+  <details>
+    <summary>JSON body (optional)</summary>
+    <textarea name="body" rows="5" placeholder='{"key":"value"}'>{{.BodyStr}}</textarea>
+  </details>
+
+  <div style="margin:1rem 0 .25rem;display:flex;gap:.5rem;align-items:center">
+    <button type="button" class="secondary"
+      hx-post="/probe" hx-target="#results" hx-swap="innerHTML"
+      hx-indicator="#probe-spinner">⚡ Test connection</button>
+    <span id="probe-spinner" class="htmx-indicator muted">testing…</span>
+  </div>
+
+  <h2>Test</h2>
+  <div class="row">
+    <label>
+      <span>Mode</span>
+      <select name="mode" id="fmode" onchange="toggleMode()">
+        <option value="load">Load (constant)</option>
+        <option value="burst">Burst (pulsed)</option>
+        <option value="auth_probe">Auth probe</option>
+        <option value="soak">Soak (timed)</option>
+      </select>
+    </label>
+    <label>
+      <span>Concurrency</span>
+      <input type="number" name="concurrency" value="5" min="1" max="500">
+    </label>
+    <label id="total-req-label">
+      <span>Total requests</span>
+      <input type="number" name="total_requests" value="50" min="1">
+    </label>
+    <label id="soak-dur-label" style="display:none">
+      <span>Duration (seconds)</span>
+      <input type="number" name="soak_seconds" value="30" min="1">
+    </label>
+  </div>
+
+  <details style="margin-top:.5rem">
+    <summary>Burst settings</summary>
+    <div class="row" style="margin-top:.5rem">
+      <label><span>Requests per burst</span><input type="number" name="burst_count" value="10" min="1"></label>
+      <label><span>Idle between bursts (ms)</span><input type="number" name="burst_idle_ms" value="500" min="0"></label>
+    </div>
+  </details>
+
+  <details style="margin-top:.5rem">
+    <summary>Assertions (optional)</summary>
+    <div class="row" style="margin-top:.5rem">
+      <label><span>Expected status codes (e.g. 200,201)</span><input type="text" name="expected_status" placeholder="200"></label>
+      <label><span>Max P95 ms (0=off)</span><input type="number" name="max_p95_ms" value="0" min="0"></label>
+      <label><span>Max error rate (0=off, e.g. 0.05)</span><input type="number" name="max_error_rate" value="0" min="0" max="1" step="0.01"></label>
+    </div>
+  </details>
+
+  <div style="margin-top:1rem;display:flex;gap:.5rem;align-items:center">
+    <button type="submit">▶ Run test</button>
+    <span id="run-spinner" class="htmx-indicator muted">running…</span>
+  </div>
+</form>
+
+<div id="results" style="margin-top:1.25rem"></div>

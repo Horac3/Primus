@@ -1,0 +1,32 @@
+{{- /* sidebar.html — fragment listing every endpoint. Target: #sidebar */ -}}
+<div style="margin-bottom:.75rem;display:flex;gap:.5rem;align-items:center">
+  <strong>Endpoints</strong>
+  <button class="secondary" style="padding:.2rem .6rem"
+    hx-get="/requests/new" hx-target="#main-panel" hx-swap="innerHTML">+ New</button>
+</div>
+{{if .}}
+<div>
+{{range .}}
+  <button class="ep-row"
+    hx-get="/requests/{{.ID}}" hx-target="#main-panel" hx-swap="innerHTML">
+    <span class="method">{{.Method}}</span>
+    <span>{{.Name}}</span><br>
+    <span class="muted ep-path">{{.URLTemplate}}</span>
+  </button>
+{{end}}
+</div>
+{{else}}
+<p class="muted">No endpoints yet — import a spec or add one manually.</p>
+{{end}}
+<details style="margin-top:.75rem">
+  <summary>Import OpenAPI</summary>
+  <form hx-post="/import" hx-target="#sidebar" hx-swap="innerHTML" style="margin-top:.5rem">
+    <label><span>Spec URL</span>
+      <input type="url" name="spec_url" placeholder="https://…/openapi.json">
+    </label>
+    <label style="margin-top:.4rem"><span>…or paste spec JSON</span>
+      <textarea name="spec_text" rows="3" placeholder='{"openapi":"3.0.0",…}'></textarea>
+    </label>
+    <div style="margin-top:.5rem"><button type="submit" class="secondary">Import</button></div>
+  </form>
+</details>

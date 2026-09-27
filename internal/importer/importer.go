@@ -94,13 +94,13 @@ func extractDefinitions(doc *openapi3.T) []model.RequestDefinition {
 	var defs []model.RequestDefinition
 	for path, item := range doc.Paths.Map() {
 		for method, op := range item.Operations() {
-			defs = append(defs, operationToDefinition(method, path, op, doc))
+			defs = append(defs, operationToDefinition(method, path, op))
 		}
 	}
 	return defs
 }
 
-func operationToDefinition(method, path string, op *openapi3.Operation, doc *openapi3.T) model.RequestDefinition {
+func operationToDefinition(method, path string, op *openapi3.Operation) model.RequestDefinition {
 	id := op.OperationID
 	if id == "" {
 		id = strings.ToUpper(method) + " " + path
@@ -121,9 +121,6 @@ func operationToDefinition(method, path string, op *openapi3.Operation, doc *ope
 
 	// Request body
 	def.Body = extractBody(op)
-
-	// Auth
-	def.Auth = extractAuth(op, doc)
 
 	return def
 }
@@ -274,49 +271,4 @@ func buildMinimalObject(schema *openapi3.Schema) map[string]any {
 		}
 	}
 	return obj
-}
-
-// extractAuth maps OpenAPI security requirements to an AuthConfig.
-func extractAuth(op *openapi3.Operation, doc *openapi3.T) *model.AuthConfig {
-	reqs := op.Security
-	if reqs == nil {
-		reqs = &doc.Security
-	}
-	if reqs == nil || len(*reqs) == 0 {
-		return nil
-	}
-	// Use the first security requirement.
-	for schemeName := range (*reqs)[0] {
-		scheme := findSecurityScheme(doc, schemeName)
-		if scheme == nil {
-			continue
-		}
-		switch strings.ToLower(scheme.Type) {
-		case "http":
-			if strings.ToLower(scheme.Scheme) == "bearer" {
-				return &model.AuthConfig{Type: model.AuthTypeBearer}
-			}
-			// basic and other http schemes: record as bearer placeholder
-			return &model.AuthConfig{Type: model.AuthTypeBearer}
-		case "apikey":
-			return &model.AuthConfig{
-				Type:   model.AuthTypeAPIKey,
-				Header: scheme.Name,
-			}
-		case "oauth2":
-			return &model.AuthConfig{Type: model.AuthTypeBearer}
-		}
-	}
-	return nil
-}
-
-func findSecurityScheme(doc *openapi3.T, name string) *openapi3.SecurityScheme {
-	if doc.Components == nil {
-		return nil
-	}
-	ref, ok := doc.Components.SecuritySchemes[name]
-	if !ok || ref == nil || ref.Value == nil {
-		return nil
-	}
-	return ref.Value
 }

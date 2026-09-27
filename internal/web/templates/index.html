@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Primus</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui,"Segoe UI",sans-serif; background:#fff; color:#1f2328; font-size:14px; line-height:1.6; }
+.shell { max-width:1100px; margin:0 auto; padding:1.5rem 1rem; }
+h1 { font-size:1.4rem; font-weight:700; margin-bottom:1rem; }
+h2 { font-size:.95rem; font-weight:600; color:#57606a; text-transform:uppercase; letter-spacing:.04em; margin:1.25rem 0 .5rem; }
+label span { display:block; font-size:.82rem; color:#57606a; margin-bottom:2px; }
+select, input[type=text], input[type=url], input[type=number], input[type=password], textarea {
+  border:1px solid #d1d5db; border-radius:4px; padding:.35rem .5rem; font-size:.9rem;
+  width:100%; background:#fff; color:#1f2328;
+}
+textarea { resize:vertical; font-family:monospace; font-size:.82rem; }
+.row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end; }
+.row label { flex:1 1 auto; min-width:140px; }
+button { background:#3b82d4; color:#fff; border:none; border-radius:4px; padding:.4rem 1rem;
+         cursor:pointer; font-size:.9rem; white-space:nowrap; }
+button:hover { background:#2563eb; }
+button.secondary { background:#f3f4f6; color:#1f2328; border:1px solid #d1d5db; }
+button.secondary:hover { background:#e5e7eb; }
+.card { background:#f7f8fa; border:1px solid #e5e7eb; border-radius:6px; padding:1rem; margin:.5rem 0; }
+.badge-pass    { background:#d1fae5; color:#065f46; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+.badge-fail    { background:#fee2e2; color:#991b1b; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+.badge-neutral { background:#e0f2fe; color:#0c4a6e; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+table { border-collapse:collapse; width:100%; font-size:.88rem; }
+th, td { text-align:left; padding:.35rem .6rem; border-bottom:1px solid #e5e7eb; }
+th { background:#f7f8fa; }
+.muted { color:#57606a; font-size:.85rem; }
+.htmx-indicator { opacity:0; transition:opacity .2s; }
+.htmx-request .htmx-indicator { opacity:1; }
+details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 0; user-select:none; }
+#results { min-height:2rem; }
+/* Phase 4 layout: auth bar + sidebar + main panel */
+#auth-bar { background:#f7f8fa; border:1px solid #e5e7eb; border-radius:6px; padding:.6rem .8rem; margin-bottom:1rem; }
+.layout { display:flex; gap:1rem; align-items:flex-start; }
+#sidebar { flex:0 0 260px; background:#f7f8fa; border:1px solid #e5e7eb; border-radius:6px; padding:.8rem; }
+#main-panel { flex:1 1 auto; min-width:0; }
+.ep-row { display:block; width:100%; text-align:left; background:#fff; color:#1f2328;
+          border:1px solid #e5e7eb; border-radius:4px; padding:.4rem .6rem; margin:.3rem 0;
+          cursor:pointer; font-size:.88rem; }
+.ep-row:hover { border-color:#3b82d4; }
+.ep-row .method { font-weight:700; color:#3b82d4; font-size:.78rem; }
+.ep-row .ep-path { font-size:.78rem; word-break:break-all; }
+.method { font-weight:700; color:#3b82d4; font-size:.85rem; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <h1>Primus <span class="muted" style="font-weight:400;font-size:.9rem">API test toolkit</span></h1>
+
+  <!-- Global auth bar: loaded once, applies to every request -->
+  <div id="auth-bar" hx-get="/auth-fragment" hx-trigger="load" hx-swap="innerHTML">
+    <span class="muted">loading auth…</span>
+  </div>
+
+  <div class="layout">
+    <!-- Sidebar: every endpoint + import, loaded once -->
+    <aside id="sidebar" hx-get="/sidebar-fragment" hx-trigger="load" hx-swap="innerHTML">
+      <span class="muted">loading endpoints…</span>
+    </aside>
+
+    <!-- Main panel: selected endpoint builder + results -->
+    <main id="main-panel">
+      <p class="muted">Select an endpoint from the sidebar, or add a new one.</p>
+    </main>
+  </div>
+
+  <h2>History</h2>
+  <div id="history" hx-get="/history-fragment" hx-trigger="load" hx-swap="innerHTML">
+    <span class="muted">loading history…</span>
+  </div>
+
+</div><!-- /shell -->
+
+<script>
+function toggleMode() {
+  const m = document.getElementById('fmode').value;
+  const soak = m === 'soak';
+  document.getElementById('total-req-label').style.display = soak ? 'none' : '';
+  document.getElementById('soak-dur-label').style.display  = soak ? '' : 'none';
+}
+</script>
+</body>
+</html>

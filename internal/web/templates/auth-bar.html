@@ -1,0 +1,27 @@
+{{- /* auth-bar.html — fragment: global auth status + editor. Target: #auth-bar */ -}}
+<form hx-post="/auth" hx-target="#auth-bar" hx-swap="innerHTML">
+  <strong>🔐 Auth:</strong>
+  <span data-testid="auth-status">{{authSummary .Auth}}</span>
+  &nbsp;
+  <label style="display:inline-block">Type
+    <select name="auth_type" style="width:auto">
+      <option value="none" {{if eq .Auth.Type "none"}}selected{{end}}>None</option>
+      <option value="bearer" {{if eq .Auth.Type "bearer"}}selected{{end}}>Bearer token</option>
+      <option value="api_key" {{if eq .Auth.Type "api_key"}}selected{{end}}>API key</option>
+      <option value="basic" {{if eq .Auth.Type "basic"}}selected{{end}}>Basic</option>
+    </select>
+  </label>
+  <label style="display:inline-block">Token / Key
+    <input type="text" name="auth_token" style="width:160px" placeholder="eyJ… or key-value">
+  </label>
+  <label style="display:inline-block">Header
+    <input type="text" name="auth_header" style="width:110px" placeholder="X-API-Key" value="{{.Auth.Header}}">
+  </label>
+  <label style="display:inline-block">User
+    <input type="text" name="auth_username" style="width:100px" value="{{.Auth.Username}}">
+  </label>
+  <label style="display:inline-block">Password
+    <input type="password" name="auth_password" style="width:110px">
+  </label>
+  <button type="submit" class="secondary">Save</button>
+</form>

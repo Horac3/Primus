@@ -46,6 +46,15 @@ func Migrate(db *sql.DB) error {
 			finished_at    TEXT NOT NULL,
 			payload        TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS global_auth (
+			id          INTEGER PRIMARY KEY CHECK (id = 1),
+			auth_type   TEXT NOT NULL,
+			token       TEXT NOT NULL DEFAULT '',
+			header_name TEXT NOT NULL DEFAULT '',
+			header_value TEXT NOT NULL DEFAULT '',
+			username    TEXT NOT NULL DEFAULT '',
+			password    TEXT NOT NULL DEFAULT ''
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -102,6 +111,35 @@ func ListRequestDefinitions(db *sql.DB) ([]model.RequestDefinition, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SaveGlobalAuth inserts or replaces the single global auth row (id=1).
+func SaveGlobalAuth(db *sql.DB, a model.AuthConfig) error {
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO global_auth (id, auth_type, token, header_name, header_value, username, password)
+		 VALUES (1, ?, ?, ?, ?, ?, ?)`,
+		string(a.Type), a.Token, a.Header, a.Value, a.Username, a.Password,
+	)
+	if err != nil {
+		return fmt.Errorf("SaveGlobalAuth: %w", err)
+	}
+	return nil
+}
+
+// GetGlobalAuth retrieves the global auth config.
+// Returns the zero AuthConfig (no error) when none has been saved yet.
+func GetGlobalAuth(db *sql.DB) (model.AuthConfig, error) {
+	row := db.QueryRow(`SELECT auth_type, token, header_name, header_value, username, password FROM global_auth WHERE id = 1`)
+	var a model.AuthConfig
+	var authType string
+	if err := row.Scan(&authType, &a.Token, &a.Header, &a.Value, &a.Username, &a.Password); err != nil {
+		if err == sql.ErrNoRows {
+			return model.AuthConfig{}, nil
+		}
+		return model.AuthConfig{}, fmt.Errorf("GetGlobalAuth: %w", err)
+	}
+	a.Type = model.AuthType(authType)
+	return a, nil
 }
 
 // SaveTestConfig inserts or replaces a TestConfig.

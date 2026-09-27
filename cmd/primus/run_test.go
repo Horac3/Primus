@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
@@ -138,6 +139,52 @@ func TestRunCmd_FailingAssertions_ExitsOne(t *testing.T) {
 	}
 	if passed, _ := summary["passed"].(bool); passed {
 		t.Errorf("summary[passed] = true, want false")
+	}
+}
+
+// ============================================================
+// Soak mode — runs until the duration elapses, exits 0 on pass
+// ============================================================
+
+func TestRunCmd_SoakMode_RunsUntilDuration(t *testing.T) {
+	// Arrange — fast target that always returns 200
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	db := newTestDB(t)
+	reqDef := model.RequestDefinition{
+		ID: "req-cli-soak", Name: "soak",
+		Method: "GET", URLTemplate: srv.URL + "/soak",
+	}
+	if err := store.SaveRequestDefinition(db, reqDef); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+
+	cfg := model.TestConfig{
+		ID:          "cfg-cli-soak",
+		RequestID:   "req-cli-soak",
+		Mode:        model.ModeSoak,
+		Concurrency: 2,
+		Duration:    1500 * time.Millisecond,
+		Assertions:  model.Assertions{ExpectedStatus: []int{200}},
+	}
+	cfgPath := writeConfigFile(t, cfg)
+
+	var out bytes.Buffer
+
+	// Act
+	start := time.Now()
+	code := runCmd(context.Background(), []string{cfgPath}, &out, db)
+	elapsed := time.Since(start)
+
+	// Assert — exit 0, and it actually soaked (not a zero-request fallthrough)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; output: %s", code, out.String())
+	}
+	if elapsed < 1200*time.Millisecond {
+		t.Errorf("elapsed = %v, want >= ~1.5s soak duration", elapsed)
 	}
 }
 
