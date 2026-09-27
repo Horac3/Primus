@@ -1044,5 +1044,93 @@ func TestImportHandler_URLSpec_RefreshesSidebarAndLoadsFirst(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Docs viewer — index, page, 404, nav link
+// ============================================================
+
+func TestDocsIndex_ListsEveryDoc(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/docs", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — one link per reference doc
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, slug := range []string{"load", "burst", "soak", "auth-probe", "global-auth", "assertions", "cli"} {
+		if !strings.Contains(body, `href="/docs/`+slug+`"`) {
+			t.Errorf("index missing link to %q", slug)
+		}
+	}
+}
+
+func TestDocsPage_RendersDoc(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/docs/load", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — the markdown heading rendered as HTML, inside the shell
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "<h1>Load test</h1>") {
+		t.Errorf("page missing rendered heading; body: %.300s…", body)
+	}
+	if !strings.Contains(body, `href="/"`) {
+		t.Errorf("page missing nav home link; body: %.300s…", body)
+	}
+}
+
+func TestDocsPage_UnknownSlug_Returns404(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/docs/nope", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert — 404 page, not a panic or blank 200
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+func TestNav_DocsLinkVisibleFromShell(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(rr, req)
+
+	// Assert
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `href="/docs"`) {
+		t.Errorf("main shell missing Docs nav link")
+	}
+}
+
 // keep JSON import for compile check
 var _ = json.Marshal

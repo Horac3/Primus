@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Doc.Title}} — Primus docs</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:system-ui,"Segoe UI",sans-serif; color:#1f2328; font-size:14px; line-height:1.6; }
+.shell { max-width:1100px; margin:0 auto; padding:1.5rem 1rem; }
+h1.brand { font-size:1.2rem; font-weight:700; }
+nav { margin:.5rem 0 1.25rem; font-size:.9rem; }
+nav a { color:#3b82d4; text-decoration:none; margin-right:1rem; }
+.layout { display:flex; gap:1.5rem; align-items:flex-start; }
+aside { flex:0 0 220px; background:#f7f8fa; border:1px solid #e5e7eb; border-radius:6px; padding:.8rem; }
+aside a { display:block; color:#3b82d4; text-decoration:none; font-size:.88rem; padding:.2rem 0; }
+aside a.current { font-weight:700; color:#1f2328; }
+main { flex:1 1 auto; min-width:0; }
+main h1 { font-size:1.4rem; margin-bottom:.75rem; }
+main h2 { font-size:1.05rem; margin:1.25rem 0 .5rem; }
+main p, main ul, main table, main pre { margin:.5rem 0; }
+main ul { padding-left:1.25rem; }
+main table { border-collapse:collapse; width:100%; font-size:.88rem; }
+main th, main td { text-align:left; padding:.35rem .6rem; border:1px solid #e5e7eb; }
+main th { background:#f7f8fa; }
+main code { background:#f3f4f6; border-radius:3px; padding:0 4px; font-size:.85em; }
+main pre { background:#f7f8fa; border:1px solid #e5e7eb; border-radius:6px; padding:.8rem; overflow-x:auto; }
+main pre code { background:none; padding:0; }
+main blockquote { border-left:3px solid #d1d5db; padding-left:.75rem; color:#57606a; margin:.5rem 0; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <h1 class="brand">Primus</h1>
+  <nav><a href="/">← Home</a><a href="/docs">Docs</a></nav>
+  <div class="layout">
+    <aside>
+      <strong style="font-size:.85rem">Reference</strong>
+      {{range .Nav}}
+      <a href="/docs/{{.Slug}}"{{if eq .Slug $.Doc.Slug}} class="current"{{end}}>{{.Title}}</a>
+      {{end}}
+    </aside>
+    <main>{{.Body}}</main>
+  </div>
+</div>
+</body>
+</html>

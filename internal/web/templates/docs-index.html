@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Docs — Primus</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:system-ui,"Segoe UI",sans-serif; max-width:860px; margin:0 auto; padding:1.5rem 1rem; color:#1f2328; font-size:14px; line-height:1.6; }
+h1 { font-size:1.4rem; font-weight:700; margin-bottom:.25rem; }
+.muted { color:#57606a; font-size:.85rem; }
+nav { margin:.75rem 0 1.25rem; font-size:.9rem; }
+nav a { color:#3b82d4; text-decoration:none; margin-right:1rem; }
+ul.doclist { list-style:none; margin-top:.5rem; }
+ul.doclist li { padding:.5rem 0; border-bottom:1px solid #e5e7eb; }
+ul.doclist a { color:#3b82d4; text-decoration:none; font-weight:600; }
+ul.doclist span { color:#57606a; font-size:.85rem; }
+</style>
+</head>
+<body>
+<h1>Primus <span class="muted" style="font-weight:400;font-size:.9rem">API test toolkit</span></h1>
+<nav><a href="/">← Home</a><a href="/docs">Docs</a></nav>
+<h2 style="font-size:1.1rem;margin-bottom:.25rem">Reference</h2>
+<p class="muted">One page per test mode, plus auth, assertions, and the CLI. Same files as in <code>docs/</code>.</p>
+<ul class="doclist">
+{{range .}}
+  <li><a href="/docs/{{.Slug}}">{{.Title}}</a></li>
+{{end}}
+</ul>
+</body>
+</html>

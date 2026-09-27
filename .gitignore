@@ -17,3 +17,6 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent working instructions — internal planning, not part of the public repo
+/agent_instructions/

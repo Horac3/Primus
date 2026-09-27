@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/getkin/kin-openapi v0.149.0
+	github.com/yuin/goldmark v1.8.6
 	modernc.org/sqlite v1.59.0
 )
 

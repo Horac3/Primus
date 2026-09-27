@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	primusdocs "github.com/Horac3/Primus/docs"
 	"github.com/Horac3/Primus/internal/engine"
 	"github.com/Horac3/Primus/internal/importer"
 	"github.com/Horac3/Primus/internal/model"
@@ -177,6 +178,8 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(tmpl, reg))
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
 	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl))
+	mux.HandleFunc("GET /docs", docsIndexHandler(tmpl))
+	mux.HandleFunc("GET /docs/{slug}", docsPageHandler(tmpl))
 
 	return mux
 }
@@ -533,6 +536,43 @@ func historyFragmentHandler(db *sql.DB, tmpl *template.Template) http.HandlerFun
 			return
 		}
 		renderTemplate(w, tmpl, "history-fragment.html", runs)
+	}
+}
+
+// ---- GET /docs + GET /docs/{slug} — in-app reference viewer ---------------
+
+func docsIndexHandler(tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		renderTemplate(w, tmpl, "docs-index.html", primusdocs.List())
+	}
+}
+
+type docsPageData struct {
+	Doc  primusdocs.Doc
+	Nav  []primusdocs.Doc
+	Body template.HTML
+}
+
+func docsPageHandler(tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		body, err := primusdocs.Render(slug)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		title := slug
+		for _, d := range primusdocs.List() {
+			if d.Slug == slug {
+				title = d.Title
+				break
+			}
+		}
+		renderTemplate(w, tmpl, "docs-page.html", docsPageData{
+			Doc:  primusdocs.Doc{Slug: slug, Title: title},
+			Nav:  primusdocs.List(),
+			Body: body,
+		})
 	}
 }
 
