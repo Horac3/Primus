@@ -1,0 +1,70 @@
+name: Publish Docker image
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Compute image tags
+        id: image-tags
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+        run: |
+          if [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_NAMESPACE" ]]; then
+            echo "::error::Set DOCKERHUB_USERNAME and DOCKERHUB_NAMESPACE in repository settings."
+            exit 1
+          fi
+
+          stable=false
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [[ "$version" != *-* ]]; then
+              stable=true
+            fi
+          else
+            version="0.1.0-beta.${GITHUB_RUN_NUMBER}"
+          fi
+
+          image="${DOCKERHUB_NAMESPACE}/primus"
+          {
+            echo "tags<<EOF"
+            echo "${image}:${version}"
+            if [[ "$stable" == true ]]; then
+              echo "${image}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.image-tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

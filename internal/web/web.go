@@ -102,6 +102,19 @@ var templateFuncs = template.FuncMap{
 		}
 		return out
 	},
+	"latencyPolyline": func(points []model.Point) string {
+		return polylineForSeries(points, func(p model.Point) float64 { return p.AvgLatencyMs }, 280, 60)
+	},
+	"rpsPolyline": func(points []model.Point) string {
+		return polylineForSeries(points, func(p model.Point) float64 { return p.RPS }, 280, 60)
+	},
+	"latencyAxis": func(points []model.Point) chartAxis {
+		return seriesAxis(points, func(p model.Point) float64 { return p.AvgLatencyMs })
+	},
+	"rpsAxis": func(points []model.Point) chartAxis {
+		return seriesAxis(points, func(p model.Point) float64 { return p.RPS })
+	},
+	"elapsedTicks": elapsedTicks,
 }
 
 // bucketLabel names bucket i of the fixed latency edges ("0–49", …, "≥600").
@@ -118,6 +131,107 @@ func bucketLabel(i int) string {
 		lo = edges[i-1]
 	}
 	return strconv.Itoa(lo) + "–" + strconv.Itoa(edges[i]-1)
+}
+
+type chartAxis struct {
+	Max string
+	Min string
+}
+
+type elapsedAxis struct {
+	Start string
+	Mid   string
+	End   string
+}
+
+func seriesAxis(points []model.Point, value func(model.Point) float64) chartAxis {
+	if len(points) == 0 {
+		return chartAxis{}
+	}
+	min, max := value(points[0]), value(points[0])
+	for _, point := range points[1:] {
+		v := value(point)
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	if max == min {
+		if max == 0 {
+			max = 1
+		} else {
+			min = max - 1
+		}
+	}
+	return chartAxis{Max: formatAxisValue(max), Min: formatAxisValue(min)}
+}
+
+func elapsedTicks(points []model.Point) elapsedAxis {
+	if len(points) == 0 {
+		return elapsedAxis{}
+	}
+	start := points[0].ElapsedMs
+	end := points[len(points)-1].ElapsedMs
+	mid := start + (end-start)/2
+	return elapsedAxis{
+		Start: formatElapsed(start),
+		Mid:   formatElapsed(mid),
+		End:   formatElapsed(end),
+	}
+}
+
+func formatAxisValue(value float64) string {
+	formatted := strconv.FormatFloat(value, 'f', 1, 64)
+	formatted = strings.TrimSuffix(strings.TrimSuffix(formatted, "0"), ".")
+	return formatted
+}
+
+func formatElapsed(milliseconds int64) string {
+	formatted := strconv.FormatFloat(float64(milliseconds)/1000, 'f', 1, 64)
+	formatted = strings.TrimSuffix(strings.TrimSuffix(formatted, "0"), ".")
+	return formatted + "s"
+}
+
+func polylineForSeries(points []model.Point, value func(model.Point) float64, width, height int) string {
+	if len(points) == 0 {
+		return ""
+	}
+	min := value(points[0])
+	max := min
+	for _, p := range points[1:] {
+		v := value(p)
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	if max == min {
+		if max == 0 {
+			max = 1
+		} else {
+			min = max - 1
+		}
+	}
+	coords := make([]string, len(points))
+	firstElapsed := points[0].ElapsedMs
+	lastElapsed := points[len(points)-1].ElapsedMs
+	for i, p := range points {
+		x := 0.0
+		if len(points) > 1 {
+			if lastElapsed > firstElapsed {
+				x = float64(p.ElapsedMs-firstElapsed) * float64(width) / float64(lastElapsed-firstElapsed)
+			} else {
+				x = float64(i) * float64(width) / float64(len(points)-1)
+			}
+		}
+		y := float64(height) - ((value(p)-min)/(max-min))*float64(height)
+		coords[i] = fmt.Sprintf("%g,%g", x, y)
+	}
+	return strings.Join(coords, " ")
 }
 
 // bucketBar is one histogram bar: Label is the ms range, Height is percent
@@ -421,8 +535,9 @@ func probeHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 // ---- POST /runs — start async, return the running fragment ---------------
 
 type runningData struct {
-	RunID  string
-	Detail string // set on the first render only; polls re-render minimally
+	RunID      string
+	Detail     string // set on the first render only; polls re-render minimally
+	TimeSeries []model.Point
 }
 
 func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.HandlerFunc {
@@ -462,8 +577,9 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 
 		// One id for the registry entry, the poll URL, and the persisted run.
 		runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
-		reg.Start(r.Context(), runID, func(ctx context.Context) (model.Run, error) {
-			run, err := engine.Run(ctx, def, cfg, auth)
+		h := &runHandle{done: make(chan struct{})}
+		reg.startWithHandle(r.Context(), runID, h, func(ctx context.Context, h *runHandle) (model.Run, error) {
+			run, err := engine.RunWithSnapshot(ctx, def, cfg, auth, &h.snapshot)
 			if err != nil {
 				return model.Run{}, err
 			}
@@ -506,7 +622,7 @@ func renderStatus(w http.ResponseWriter, r *http.Request, tmpl *template.Templat
 		return
 	}
 	if status == "running" || result == nil {
-		renderTemplate(w, tmpl, "running.html", runningData{RunID: id})
+		renderTemplate(w, tmpl, "running.html", runningData{RunID: id, TimeSeries: reg.Snapshot(id)})
 		return
 	}
 	renderTemplate(w, tmpl, "run-result-fragment.html", *result)

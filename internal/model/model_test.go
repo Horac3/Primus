@@ -255,4 +255,45 @@ func TestRun_AssertionResultsAndBucketsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRun_TimeSeriesRoundTrip(t *testing.T) {
+	// Arrange
+	orig := model.Run{
+		ID:           "run-timeseries",
+		TestConfigID: "cfg-timeseries",
+		StartedAt:    time.Now().UTC().Truncate(time.Second),
+		FinishedAt:   time.Now().UTC().Truncate(time.Second).Add(2 * time.Second),
+		Summary: model.RunSummary{ErrorDetails: []model.ErrorDetail{
+			{Cause: "connection refused", Count: 2},
+		}},
+		TimeSeries: []model.Point{
+			{ElapsedMs: 1000, AvgLatencyMs: 120.5, RPS: 8.5, ErrorRate: 0.2},
+			{ElapsedMs: 2000, AvgLatencyMs: 150.0, RPS: 10.0, ErrorRate: 0.1},
+		},
+	}
+
+	// Act
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got model.Run
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Assert
+	if len(got.TimeSeries) != 2 {
+		t.Fatalf("TimeSeries len = %d, want 2", len(got.TimeSeries))
+	}
+	if got.TimeSeries[1].ElapsedMs <= got.TimeSeries[0].ElapsedMs {
+		t.Fatalf("TimeSeries elapsed times should be monotonic; got %+v", got.TimeSeries)
+	}
+	if got.TimeSeries[0].AvgLatencyMs != 120.5 {
+		t.Fatalf("AvgLatencyMs[0] = %v, want 120.5", got.TimeSeries[0].AvgLatencyMs)
+	}
+	if len(got.Summary.ErrorDetails) != 1 || got.Summary.ErrorDetails[0] != (model.ErrorDetail{Cause: "connection refused", Count: 2}) {
+		t.Fatalf("ErrorDetails = %+v, want persisted transport failure detail", got.Summary.ErrorDetails)
+	}
+}
+
 func strPtr(s string) *string { return &s }

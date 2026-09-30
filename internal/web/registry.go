@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Horac3/Primus/internal/model"
@@ -18,6 +19,7 @@ type runHandle struct {
 	result     *model.Run
 	finishedAt time.Time
 	once       sync.Once
+	snapshot   atomic.Pointer[[]model.Point]
 }
 
 // Registry tracks in-flight runs for async execution + polling.
@@ -73,6 +75,34 @@ func (r *Registry) Start(parent context.Context, id string, fn func(ctx context.
 	}()
 }
 
+func (r *Registry) startWithHandle(parent context.Context, id string, h *runHandle, fn func(ctx context.Context, h *runHandle) (model.Run, error)) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	h.cancel = cancel
+
+	r.mu.Lock()
+	r.runs[id] = h
+	// Opportunistic sweep: drop finished results older than the TTL so the
+	// registry can't grow unbounded across a long session.
+	for otherID, other := range r.runs {
+		if otherID != id && other.finishedAt.IsZero() {
+			continue
+		}
+		select {
+		case <-other.done:
+			if time.Since(other.finishedAt) > r.TTL {
+				delete(r.runs, otherID)
+			}
+		default:
+		}
+	}
+	r.mu.Unlock()
+
+	go func() {
+		run, err := fn(ctx, h)
+		r.finish(id, h, run, err)
+	}()
+}
+
 func (r *Registry) finish(id string, h *runHandle, run model.Run, err error) {
 	h.once.Do(func() {
 		if err == nil {
@@ -103,6 +133,20 @@ func (r *Registry) Poll(id string) (status string, result *model.Run, ok bool) {
 	default:
 		return "running", nil, true
 	}
+}
+
+func (r *Registry) Snapshot(id string) []model.Point {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, found := r.runs[id]
+	if !found || h == nil {
+		return nil
+	}
+	if s := h.snapshot.Load(); s != nil {
+		clone := append([]model.Point(nil), (*s)...)
+		return clone
+	}
+	return nil
 }
 
 // Stop cancels an in-flight run. It reports false for unknown or already

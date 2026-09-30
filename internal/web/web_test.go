@@ -445,9 +445,12 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 		TestConfigID: "cfg-x",
 		StartedAt:    now,
 		FinishedAt:   now.Add(time.Second),
-		Summary:      model.RunSummary{StatusCounts: map[int]int{200: 10}},
-		Outcome:      model.OutcomePass,
-		Passed:       true,
+		Summary: model.RunSummary{
+			StatusCounts: map[int]int{200: 10},
+			ErrorDetails: []model.ErrorDetail{{Cause: "connection refused", Count: 2}},
+		},
+		Outcome: model.OutcomePass,
+		Passed:  true,
 	}
 	if err := store.SaveRun(db, run); err != nil {
 		t.Fatalf("SaveRun: %v", err)
@@ -466,6 +469,9 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "run-known") {
 		t.Errorf("body does not contain run ID; body: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "connection refused") || !strings.Contains(rr.Body.String(), "Failure cause") {
+		t.Errorf("run page does not show failure cause details; body: %s", rr.Body.String())
 	}
 }
 
@@ -540,6 +546,50 @@ func TestAuthHandler_SaveAndRenderMasked(t *testing.T) {
 	}
 	if !strings.Contains(rr2.Body.String(), "1234") {
 		t.Errorf("auth-fragment missing saved state; body: %s", rr2.Body.String())
+	}
+}
+
+func TestAuthFragment_BasicCredentialsVisibleOnlyForBasic(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	cases := []struct {
+		authType model.AuthType
+		visible  bool
+	}{
+		{authType: model.AuthTypeNone, visible: false},
+		{authType: model.AuthTypeBearer, visible: false},
+		{authType: model.AuthTypeAPIKey, visible: false},
+		{authType: model.AuthTypeBasic, visible: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.authType), func(t *testing.T) {
+			if err := store.SaveGlobalAuth(db, model.AuthConfig{Type: tc.authType}); err != nil {
+				t.Fatalf("SaveGlobalAuth: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/auth-fragment", nil)
+			rr := httptest.NewRecorder()
+
+			// Act
+			mux.ServeHTTP(rr, req)
+
+			// Assert
+			body := rr.Body.String()
+			for _, field := range []string{"auth_username", "auth_password"} {
+				position := strings.Index(body, `name="`+field+`"`)
+				if position < 0 {
+					t.Errorf("fragment missing %s field", field)
+					continue
+				}
+				labelStart := strings.LastIndex(body[:position], "<label")
+				label := body[labelStart:position]
+				hidden := strings.Contains(label, "hidden")
+				if hidden == tc.visible {
+					t.Errorf("%s hidden = %v, want visible = %v; label: %s", field, hidden, tc.visible, label)
+				}
+			}
+		})
 	}
 }
 

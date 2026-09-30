@@ -25,6 +25,16 @@
     </tbody>
   </table>
   {{end}}
+  {{if .Summary.ErrorDetails}}
+  <table style="margin-top:.5rem">
+    <thead><tr><th>Failure cause</th><th>Count</th></tr></thead>
+    <tbody>
+    {{range .Summary.ErrorDetails}}
+    <tr><td style="overflow-wrap:anywhere">{{.Cause}}</td><td>{{.Count}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
   {{if .AssertionResults}}
   <table style="margin-top:.5rem">
     <thead><tr><th>Assertion</th><th>Result</th></tr></thead>
@@ -35,5 +45,6 @@
     </tbody>
   </table>
   {{end}}
+  {{template "timeseries" .}}
   {{template "histogram" .}}
 </div>

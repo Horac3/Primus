@@ -20,3 +20,5 @@ Thumbs.db
 
 # Agent working instructions — internal planning, not part of the public repo
 /agent_instructions/
+.bob/
+bob_sessions/

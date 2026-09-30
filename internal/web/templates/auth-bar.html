@@ -4,7 +4,7 @@
   <span data-testid="auth-status">{{authSummary .Auth}}</span>
   &nbsp;
   <label style="display:inline-block">Type
-    <select name="auth_type" style="width:auto">
+    <select name="auth_type" style="width:auto" onchange="const showBasic = this.value === 'basic'; this.form.querySelectorAll('[data-basic-auth]').forEach(field => { field.hidden = !showBasic; });">
       <option value="none" {{if eq .Auth.Type "none"}}selected{{end}}>None</option>
       <option value="bearer" {{if eq .Auth.Type "bearer"}}selected{{end}}>Bearer token</option>
       <option value="api_key" {{if eq .Auth.Type "api_key"}}selected{{end}}>API key</option>
@@ -17,10 +17,10 @@
   <label style="display:inline-block">Header
     <input type="text" name="auth_header" style="width:110px" placeholder="X-API-Key" value="{{.Auth.Header}}">
   </label>
-  <label style="display:inline-block">User
+  <label data-basic-auth {{if ne .Auth.Type "basic"}}hidden{{end}} style="display:inline-block">User
     <input type="text" name="auth_username" style="width:100px" value="{{.Auth.Username}}">
   </label>
-  <label style="display:inline-block">Password
+  <label data-basic-auth {{if ne .Auth.Type "basic"}}hidden{{end}} style="display:inline-block">Password
     <input type="password" name="auth_password" style="width:110px">
   </label>
   <button type="submit" class="secondary">Save</button>

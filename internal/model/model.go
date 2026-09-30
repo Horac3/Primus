@@ -115,13 +115,19 @@ type TestConfig struct {
 }
 
 // RunSummary holds aggregate metrics for a completed run.
+type ErrorDetail struct {
+	Cause string `json:"cause"`
+	Count int    `json:"count"`
+}
+
 type RunSummary struct {
-	StatusCounts map[int]int `json:"status_counts,omitempty"`
-	ErrorCount   int         `json:"error_count"`
-	P50Millis    int         `json:"p50_millis"`
-	P95Millis    int         `json:"p95_millis"`
-	P99Millis    int         `json:"p99_millis"`
-	ErrorRate    float64     `json:"error_rate"`
+	StatusCounts map[int]int   `json:"status_counts,omitempty"`
+	ErrorCount   int           `json:"error_count"`
+	ErrorDetails []ErrorDetail `json:"error_details,omitempty"`
+	P50Millis    int           `json:"p50_millis"`
+	P95Millis    int           `json:"p95_millis"`
+	P99Millis    int           `json:"p99_millis"`
+	ErrorRate    float64       `json:"error_rate"`
 	// TotalRequests is the actual number of fired requests (completed
 	// responses + transport errors). Basis for requests/sec.
 	TotalRequests int `json:"total_requests"`
@@ -156,6 +162,14 @@ type AssertionResult struct {
 // a final >= last-edge overflow bucket.
 var LatencyBucketEdges = []int{50, 100, 150, 200, 300, 400, 500, 600}
 
+// Point captures one time-slice in a live or finished run timeline.
+type Point struct {
+	ElapsedMs    int64   `json:"elapsed_ms"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	RPS          float64 `json:"rps"`
+	ErrorRate    float64 `json:"error_rate"`
+}
+
 // Run is a single execution of a TestConfig.
 type Run struct {
 	ID               string            `json:"id"`
@@ -167,4 +181,5 @@ type Run struct {
 	Passed           bool              `json:"passed"`
 	AssertionResults []AssertionResult `json:"assertion_results,omitempty"`
 	LatencyBuckets   []int             `json:"latency_buckets,omitempty"`
+	TimeSeries       []Point           `json:"time_series,omitempty"`
 }

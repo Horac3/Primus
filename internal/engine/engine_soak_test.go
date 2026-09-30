@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Horac3/Primus/internal/engine"
@@ -127,11 +128,11 @@ func TestProbe_NoAuth_SendsNoAuthHeader(t *testing.T) {
 }
 
 func TestRun_AppliesGlobalAuthToEveryRequest(t *testing.T) { // Arrange — counts how many hits carried the bearer header
-	var authed, total int
+	var authed, total atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		total++
+		total.Add(1)
 		if r.Header.Get("Authorization") == "Bearer shared-tok" {
-			authed++
+			authed.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -154,11 +155,11 @@ func TestRun_AppliesGlobalAuthToEveryRequest(t *testing.T) { // Arrange — coun
 	if err != nil {
 		t.Fatalf("RunLoad: %v", err)
 	}
-	if total != 6 {
-		t.Fatalf("total = %d, want 6", total)
+	if total.Load() != 6 {
+		t.Fatalf("total = %d, want 6", total.Load())
 	}
-	if authed != total {
-		t.Errorf("authed = %d, want %d (global auth must apply to every request)", authed, total)
+	if authed.Load() != total.Load() {
+		t.Errorf("authed = %d, want %d (global auth must apply to every request)", authed.Load(), total.Load())
 	}
 }
 

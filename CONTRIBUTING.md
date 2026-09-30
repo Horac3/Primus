@@ -38,6 +38,23 @@ docker run --rm -v "$PWD":/src -w /src golang:1.25 go test -race ./...
 
 (On Windows PowerShell, replace `$PWD` with `${PWD}`.)
 
+## Docker Hub publishing
+
+The `Publish Docker image` GitHub Actions workflow publishes images to
+`DOCKERHUB_NAMESPACE/primus`. Configure these in the repository's **Settings
+→ Secrets and variables → Actions** before merging the workflow:
+
+- Secret `DOCKERHUB_USERNAME`: Docker Hub account used to authenticate.
+- Secret `DOCKERHUB_TOKEN`: Docker Hub access token with permission to push.
+- Variable `DOCKERHUB_NAMESPACE`: Docker Hub user or organization that owns
+  the `primus` repository. Create that repository on Docker Hub first.
+
+Each push to `master` or `main` publishes `0.1.0-beta.<workflow run number>`.
+To publish a stable release, push a version tag such as `v0.1.0`; the workflow
+publishes `0.1.0` and updates `latest`. A version tag containing a prerelease
+suffix, such as `v0.1.0-beta.4`, publishes that exact prerelease tag without
+updating `latest`.
+
 ## Testing discipline (TDD)
 
 We practice strict test-driven development, one small behavior at a time:

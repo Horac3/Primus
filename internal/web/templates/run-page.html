@@ -63,6 +63,16 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
   <tr><th>Requests</th><td>{{.Summary.TotalRequests}}</td></tr>
   <tr><th>Requests/sec</th><td>{{requestsPerSec .}}</td></tr>
 </table>
+{{if .Summary.ErrorDetails}}
+<table>
+  <thead><tr><th>Failure cause</th><th>Count</th></tr></thead>
+  <tbody>
+  {{range .Summary.ErrorDetails}}
+  <tr><td style="overflow-wrap:anywhere">{{.Cause}}</td><td>{{.Count}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
 </section>
 
 {{if .AssertionResults}}
@@ -76,6 +86,13 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
   {{end}}
   </tbody>
 </table>
+</section>
+{{end}}
+
+{{if .TimeSeries}}
+<section>
+<h2>Time series</h2>
+{{template "timeseries" .}}
 </section>
 {{end}}
 

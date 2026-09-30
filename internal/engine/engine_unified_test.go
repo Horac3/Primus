@@ -255,6 +255,57 @@ func TestRun_CountMode_CompletesFixedCount(t *testing.T) {
 	}
 }
 
+func TestRun_RecordsUnexpectedStatusCause(t *testing.T) {
+	// Arrange
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	def := model.RequestDefinition{ID: "err-status", Name: "err-status", Method: "GET", URLTemplate: srv.URL}
+	cfg := model.TestConfig{
+		ID: "cfg-err-status", RequestID: def.ID, Mode: model.ModeLoad,
+		Concurrency: 2, TotalRequests: 3,
+		Assertions: model.Assertions{ExpectedStatus: []int{http.StatusOK}},
+	}
+
+	// Act
+	run, err := engine.Run(context.Background(), def, cfg, model.AuthConfig{})
+
+	// Assert
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(run.Summary.ErrorDetails) != 1 {
+		t.Fatalf("ErrorDetails = %+v, want one grouped cause", run.Summary.ErrorDetails)
+	}
+	detail := run.Summary.ErrorDetails[0]
+	if detail.Cause != "Unexpected HTTP status 503 (expected: 200)" || detail.Count != 3 {
+		t.Errorf("ErrorDetails[0] = %+v, want status 503 counted 3 times", detail)
+	}
+}
+
+func TestRun_RecordsTransportFailureCause(t *testing.T) {
+	// Arrange
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	url := srv.URL
+	srv.Close()
+	def := model.RequestDefinition{ID: "err-transport", Name: "err-transport", Method: "GET", URLTemplate: url}
+	cfg := model.TestConfig{ID: "cfg-err-transport", RequestID: def.ID, Mode: model.ModeLoad, Concurrency: 1, TotalRequests: 2}
+
+	// Act
+	run, err := engine.Run(context.Background(), def, cfg, model.AuthConfig{})
+
+	// Assert
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(run.Summary.ErrorDetails) != 1 || run.Summary.ErrorDetails[0].Count != 2 || run.Summary.ErrorDetails[0].Cause == "" {
+		t.Errorf("ErrorDetails = %+v, want one non-empty transport cause counted twice", run.Summary.ErrorDetails)
+	}
+}
+
 func TestRun_InvalidConfig_ReturnsError(t *testing.T) {
 	// Arrange — both stop conditions set
 	def := model.RequestDefinition{ID: "u3", Name: "u3", Method: "GET", URLTemplate: "http://x.invalid/"}
