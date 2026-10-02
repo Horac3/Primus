@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -17,6 +18,7 @@ import (
 	primusdocs "github.com/Horac3/Primus/docs"
 	"github.com/Horac3/Primus/internal/engine"
 	"github.com/Horac3/Primus/internal/importer"
+	"github.com/Horac3/Primus/internal/insight"
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
 )
@@ -268,6 +270,10 @@ func NewServerWithTemplateDir(db *sql.DB, templateDir string) *http.ServeMux {
 
 func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux {
 	mux := http.NewServeMux()
+	analyzer := configuredInsightAnalyzer()
+	if _, err := store.FailPendingInsights(db, "insight generation interrupted by server restart"); err != nil {
+		log.Printf("web: recover pending insights: %v", err)
+	}
 
 	staticFS, err := fs.Sub(embeddedFS, "static")
 	if err != nil {
@@ -288,14 +294,29 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /import", importHandler(db, tmpl))
 	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
 	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg))
-	mux.HandleFunc("GET /runs/{id}/status", runStatusHandler(tmpl, reg))
-	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(tmpl, reg))
+	mux.HandleFunc("POST /runs/{id}/insights", postInsightHandler(db, tmpl, analyzer))
+	mux.HandleFunc("GET /runs/{id}/insights", getInsightHandler(db, tmpl))
+	mux.HandleFunc("GET /runs/{id}/status", runStatusHandler(db, tmpl, reg, analyzer))
+	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(db, tmpl, reg, analyzer))
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
 	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl))
 	mux.HandleFunc("GET /docs", docsIndexHandler(tmpl))
 	mux.HandleFunc("GET /docs/{slug}", docsPageHandler(tmpl))
 
 	return mux
+}
+
+func configuredInsightAnalyzer() insight.Analyzer {
+	config, err := insight.LoadConfig()
+	if err != nil {
+		log.Printf("web: load insight config: %v", err)
+	}
+	analyzer, err := insight.NewAnalyzer(config)
+	if err != nil {
+		log.Printf("web: %v; using rules analyzer", err)
+		return insight.RulesAnalyzer{}
+	}
+	return analyzer
 }
 
 // ---- GET / — single page ---------------------------------------------------
@@ -597,25 +618,25 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 
 // ---- GET /runs/status/{id} — poll an in-flight run --------------------------
 
-func runStatusHandler(tmpl *template.Template, reg *Registry) http.HandlerFunc {
+func runStatusHandler(db *sql.DB, tmpl *template.Template, reg *Registry, analyzer insight.Analyzer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		renderStatus(w, r, tmpl, reg, r.PathValue("id"))
+		renderStatus(w, r, db, tmpl, reg, analyzer, r.PathValue("id"))
 	}
 }
 
 // ---- POST /runs/{id}/stop — cancel an in-flight run -------------------------
 
-func runStopHandler(tmpl *template.Template, reg *Registry) http.HandlerFunc {
+func runStopHandler(db *sql.DB, tmpl *template.Template, reg *Registry, analyzer insight.Analyzer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		reg.Stop(id) // no-op when already finished; status render decides
-		renderStatus(w, r, tmpl, reg, id)
+		renderStatus(w, r, db, tmpl, reg, analyzer, id)
 	}
 }
 
 // renderStatus renders the running fragment (keeps the client polling) or
 // the final result fragment (polling stops — no poll trigger in it).
-func renderStatus(w http.ResponseWriter, r *http.Request, tmpl *template.Template, reg *Registry, id string) {
+func renderStatus(w http.ResponseWriter, r *http.Request, db *sql.DB, tmpl *template.Template, reg *Registry, analyzer insight.Analyzer, id string) {
 	status, result, ok := reg.Poll(id)
 	if !ok {
 		http.NotFound(w, r)
@@ -625,7 +646,34 @@ func renderStatus(w http.ResponseWriter, r *http.Request, tmpl *template.Templat
 		renderTemplate(w, tmpl, "running.html", runningData{RunID: id, TimeSeries: reg.Snapshot(id)})
 		return
 	}
-	renderTemplate(w, tmpl, "run-result-fragment.html", *result)
+	ensureCompletedInsight(db, *result, analyzer)
+	renderTemplate(w, tmpl, "run-result-fragment.html", runResultData(db, *result))
+}
+
+func ensureCompletedInsight(db *sql.DB, run model.Run, analyzer insight.Analyzer) {
+	if _, err := store.GetInsight(db, run.ID); err == nil {
+		return
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		log.Printf("web: load insight for completed run %s: %v", run.ID, err)
+		return
+	}
+	modelName := analyzerModelName(analyzer)
+	if _, started, err := store.StartInsight(db, run.ID, analyzer.Name(), modelName); err != nil {
+		log.Printf("web: start insight for completed run %s: %v", run.ID, err)
+		return
+	} else if !started {
+		return
+	}
+	generateRunInsight(db, run, analyzer)
+}
+
+type runResultTemplateData struct {
+	model.Run
+	InsightView insightFragmentData
+}
+
+func runResultData(db *sql.DB, run model.Run) runResultTemplateData {
+	return runResultTemplateData{Run: run, InsightView: loadInsightView(db, run.ID)}
 }
 
 // ---- GET /runs/{id} — shareable page ---------------------------------------
@@ -638,8 +686,85 @@ func getRunHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		renderTemplate(w, tmpl, "run-page.html", run)
+		renderTemplate(w, tmpl, "run-page.html", runResultData(db, run))
 	}
+}
+
+type insightFragmentData struct {
+	RunID   string
+	Insight *store.InsightRecord
+}
+
+func loadInsightView(db *sql.DB, runID string) insightFragmentData {
+	view := insightFragmentData{RunID: runID}
+	record, err := store.GetInsight(db, runID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("web: load insight for run %s: %v", runID, err)
+		}
+		return view
+	}
+	view.Insight = &record
+	return view
+}
+
+func getInsightHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if _, err := store.GetRun(db, id); err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		renderTemplate(w, tmpl, "insight-fragment", loadInsightView(db, id))
+	}
+}
+
+func postInsightHandler(db *sql.DB, tmpl *template.Template, analyzer insight.Analyzer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		run, err := store.GetRun(db, id)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		modelName := analyzerModelName(analyzer)
+		record, started, err := store.StartInsight(db, id, analyzer.Name(), modelName)
+		if err != nil {
+			http.Error(w, "start insight: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if started {
+			go generateRunInsight(db, run, analyzer)
+		}
+		renderTemplate(w, tmpl, "insight-fragment", insightFragmentData{RunID: id, Insight: &record})
+	}
+}
+
+func generateRunInsight(db *sql.DB, run model.Run, analyzer insight.Analyzer) {
+	modelName := analyzerModelName(analyzer)
+	summary := insight.BuildSummary(run)
+	findings := insight.Evaluate(summary)
+	report, err := analyzer.Analyze(context.Background(), summary, findings)
+	if err != nil {
+		log.Printf("web: analyzer %s failed for run %s; falling back to rules: %v", analyzer.Name(), run.ID, err)
+		report, err = (insight.RulesAnalyzer{}).Analyze(context.Background(), summary, findings)
+	}
+	if err != nil {
+		if updateErr := store.FailInsight(db, run.ID, analyzer.Name(), modelName, err.Error()); updateErr != nil {
+			log.Printf("web: persist failed insight for run %s: %v", run.ID, updateErr)
+		}
+		return
+	}
+	if err := store.CompleteInsight(db, run.ID, report.AnalyzerName, report.ModelName, report.Text); err != nil {
+		log.Printf("web: persist completed insight for run %s: %v", run.ID, err)
+	}
+}
+
+func analyzerModelName(analyzer insight.Analyzer) string {
+	if modelNamer, ok := analyzer.(interface{ ModelName() string }); ok {
+		return modelNamer.ModelName()
+	}
+	return analyzer.Name()
 }
 
 // ---- GET /history-fragment -------------------------------------------------

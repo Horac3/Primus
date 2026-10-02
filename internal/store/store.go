@@ -55,6 +55,15 @@ func Migrate(db *sql.DB) error {
 			username    TEXT NOT NULL DEFAULT '',
 			password    TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS insights (
+			run_id     TEXT PRIMARY KEY,
+			analyzer   TEXT NOT NULL,
+			model      TEXT NOT NULL DEFAULT '',
+			status     TEXT NOT NULL CHECK (status IN ('pending', 'done', 'failed')),
+			text       TEXT NOT NULL DEFAULT '',
+			error      TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -263,4 +272,108 @@ func ListRuns(db *sql.DB, testConfigID string) ([]model.Run, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+const (
+	InsightPending = "pending"
+	InsightDone    = "done"
+	InsightFailed  = "failed"
+)
+
+type InsightRecord struct {
+	RunID     string
+	Analyzer  string
+	Model     string
+	Status    string
+	Text      string
+	Error     string
+	CreatedAt time.Time
+}
+
+// StartInsight inserts a pending row or restarts a completed/failed row.
+// It reports started=false when a pending row already exists.
+func StartInsight(db *sql.DB, runID, analyzer, modelName string) (InsightRecord, bool, error) {
+	createdAt := time.Now().UTC()
+	result, err := db.Exec(
+		`INSERT INTO insights (run_id, analyzer, model, status, text, error, created_at)
+		 VALUES (?, ?, ?, 'pending', '', '', ?)
+		 ON CONFLICT(run_id) DO UPDATE SET
+			 analyzer = excluded.analyzer,
+			 model = excluded.model,
+			 status = 'pending',
+			 text = '',
+			 error = '',
+			 created_at = excluded.created_at
+		 WHERE insights.status != 'pending'`,
+		runID, analyzer, modelName, createdAt.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return InsightRecord{}, false, fmt.Errorf("StartInsight %q: %w", runID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return InsightRecord{}, false, fmt.Errorf("StartInsight rows affected: %w", err)
+	}
+	record, err := GetInsight(db, runID)
+	return record, rowsAffected > 0, err
+}
+
+func GetInsight(db *sql.DB, runID string) (InsightRecord, error) {
+	var record InsightRecord
+	var createdAt string
+	err := db.QueryRow(
+		`SELECT run_id, analyzer, model, status, text, error, created_at FROM insights WHERE run_id = ?`, runID,
+	).Scan(&record.RunID, &record.Analyzer, &record.Model, &record.Status, &record.Text, &record.Error, &createdAt)
+	if err != nil {
+		return InsightRecord{}, fmt.Errorf("GetInsight %q: %w", runID, err)
+	}
+	record.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return InsightRecord{}, fmt.Errorf("parse insight created_at: %w", err)
+	}
+	return record, nil
+}
+
+func CompleteInsight(db *sql.DB, runID, analyzer, modelName, text string) error {
+	result, err := db.Exec(
+		`UPDATE insights SET analyzer = ?, model = ?, status = 'done', text = ?, error = '' WHERE run_id = ? AND status = 'pending'`,
+		analyzer, modelName, text, runID,
+	)
+	return requireInsightUpdate(result, err, runID, "complete")
+}
+
+func FailInsight(db *sql.DB, runID, analyzer, modelName, cause string) error {
+	result, err := db.Exec(
+		`UPDATE insights SET analyzer = ?, model = ?, status = 'failed', text = '', error = ? WHERE run_id = ? AND status = 'pending'`,
+		analyzer, modelName, cause, runID,
+	)
+	return requireInsightUpdate(result, err, runID, "fail")
+}
+
+func requireInsightUpdate(result sql.Result, err error, runID, operation string) error {
+	if err != nil {
+		return fmt.Errorf("%s insight %q: %w", operation, runID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s insight rows affected: %w", operation, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("%s insight %q: no pending row", operation, runID)
+	}
+	return nil
+}
+
+func FailPendingInsights(db *sql.DB, cause string) (int64, error) {
+	result, err := db.Exec(
+		`UPDATE insights SET status = 'failed', error = ? WHERE status = 'pending'`, cause,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("FailPendingInsights: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("FailPendingInsights rows affected: %w", err)
+	}
+	return count, nil
 }

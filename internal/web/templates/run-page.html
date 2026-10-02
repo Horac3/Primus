@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Run {{.ID}} — Primus</title>
+<script src="/static/htmx.min.js"></script>
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
 body { font-family:system-ui,"Segoe UI",sans-serif; max-width:720px; margin:2rem auto; padding:0 1rem; color:#1f2328; font-size:14px; line-height:1.6; }
@@ -61,7 +62,7 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
   <tr><th>Error count</th><td>{{.Summary.ErrorCount}}</td></tr>
   <tr><th>Error rate</th><td>{{printf "%.2f%%" (mul .Summary.ErrorRate 100.0)}}</td></tr>
   <tr><th>Requests</th><td>{{.Summary.TotalRequests}}</td></tr>
-  <tr><th>Requests/sec</th><td>{{requestsPerSec .}}</td></tr>
+  <tr><th>Requests/sec</th><td>{{requestsPerSec .Run}}</td></tr>
 </table>
 {{if .Summary.ErrorDetails}}
 <table>
@@ -110,5 +111,9 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
 </table>
 </section>
 {{end}}
+<section>
+<h2>Insights</h2>
+{{template "insight-fragment" .InsightView}}
+</section>
 </body>
 </html>

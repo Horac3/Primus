@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,7 +176,10 @@ func TestRunsHandler_AllFailed_ZeroAssertions_RunPassedFalse(t *testing.T) {
 
 	// Act — start async, poll to completion
 	id := postRuns(t, mux, form)
-	pollDone(t, mux, id)
+	body := pollDone(t, mux, id)
+	if !strings.Contains(body, "Run insight") || !strings.Contains(body, "No assertions were configured") {
+		t.Errorf("completed run card missing rules insight; body: %s", body)
+	}
 
 	// Assert — persisted run is never a green PASS
 	runs, err := store.ListAllRuns(db)
@@ -472,6 +477,121 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "connection refused") || !strings.Contains(rr.Body.String(), "Failure cause") {
 		t.Errorf("run page does not show failure cause details; body: %s", rr.Body.String())
+	}
+}
+
+func TestRunInsightAsyncLifecycleAndReuse(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var calls atomic.Int32
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"content":"{\"headline\":\"Run finished\",\"explanation\":\"The recorded requests completed.\",\"next_steps\":[\"Review the result.\"]}"}}`))
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+	t.Setenv("PRIMUS_LLM_TIMEOUT", "2s")
+
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-insight", TestConfigID: "cfg-x", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	mux := web.NewServer(db)
+	post := httptest.NewRequest(http.MethodPost, "/runs/run-insight/insights", nil)
+	postResponse := httptest.NewRecorder()
+	mux.ServeHTTP(postResponse, post)
+	if postResponse.Code != http.StatusOK || !strings.Contains(postResponse.Body.String(), "Generating...") || !strings.Contains(postResponse.Body.String(), `hx-trigger="every 2s"`) {
+		t.Fatalf("POST insight response = %d %s", postResponse.Code, postResponse.Body.String())
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("analyzer was not called")
+	}
+	pending := httptest.NewRecorder()
+	mux.ServeHTTP(pending, httptest.NewRequest(http.MethodGet, "/runs/run-insight/insights", nil))
+	if !strings.Contains(pending.Body.String(), "Generating...") || !strings.Contains(pending.Body.String(), `hx-trigger="every 2s"`) {
+		t.Fatalf("GET pending insight = %d %s", pending.Code, pending.Body.String())
+	}
+
+	duplicate := httptest.NewRecorder()
+	mux.ServeHTTP(duplicate, httptest.NewRequest(http.MethodPost, "/runs/run-insight/insights", nil))
+	select {
+	case <-started:
+		t.Fatal("duplicate POST started a second analyzer")
+	default:
+	}
+
+	unblock()
+	deadline := time.Now().Add(2 * time.Second)
+	var finalBody string
+	for time.Now().Before(deadline) {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/run-insight/insights", nil))
+		finalBody = response.Body.String()
+		if strings.Contains(finalBody, "Run finished") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(finalBody, "ollama") || !strings.Contains(finalBody, "test-model") || strings.Contains(finalBody, `hx-trigger="every 2s"`) {
+		t.Fatalf("final insight fragment = %s", finalBody)
+	}
+
+	page := httptest.NewRecorder()
+	mux.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/runs/run-insight", nil))
+	if !strings.Contains(page.Body.String(), "Run finished") || !strings.Contains(page.Body.String(), "test-model") {
+		t.Fatalf("reopened run page did not reuse insight: %s", page.Body.String())
+	}
+	if calls.Load() != 1 {
+		t.Errorf("analyzer calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestRunInsightStartupMarksPendingFailed(t *testing.T) {
+	db := newTestDB(t)
+	if _, _, err := store.StartInsight(db, "run-orphan", "rules", "rules-v1"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+	_ = web.NewServer(db)
+	got, err := store.GetInsight(db, "run-orphan")
+	if err != nil {
+		t.Fatalf("GetInsight: %v", err)
+	}
+	if got.Status != store.InsightFailed {
+		t.Fatalf("pending insight status = %q, want failed", got.Status)
+	}
+}
+
+func TestGetFailedInsightHasFinalFragmentAndMetadata(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-failed-insight", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if _, _, err := store.StartInsight(db, "run-failed-insight", "ollama", "qwen2.5:3b"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+	if err := store.FailInsight(db, "run-failed-insight", "ollama", "qwen2.5:3b", "model unavailable"); err != nil {
+		t.Fatalf("FailInsight: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	web.NewServer(db).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/runs/run-failed-insight/insights", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "ollama") || !strings.Contains(rr.Body.String(), "qwen2.5:3b") || !strings.Contains(rr.Body.String(), "model unavailable") {
+		t.Fatalf("failed insight response = %d %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `hx-trigger="every 2s"`) {
+		t.Error("failed insight fragment should not poll")
 	}
 }
 
@@ -1046,6 +1166,9 @@ func TestGetRunHandler_HistogramBarHeights(t *testing.T) {
 	}
 	if !strings.Contains(body, "height:50px") {
 		t.Errorf("missing half-height bar; body: %s", body)
+	}
+	if !strings.Contains(body, "Latency distribution") {
+		t.Errorf("missing histogram label; body: %s", body)
 	}
 }
 

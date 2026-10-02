@@ -579,6 +579,8 @@ func buildRun(cfg model.TestConfig, summary model.RunSummary, checks []model.Ass
 	return model.Run{
 		ID:               fmt.Sprintf("run-%d", startedAt.UnixNano()),
 		TestConfigID:     cfg.ID,
+		Mode:             cfg.Mode,
+		Concurrency:      cfg.Concurrency,
 		StartedAt:        startedAt,
 		FinishedAt:       finishedAt,
 		Summary:          summary,

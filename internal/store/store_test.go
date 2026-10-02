@@ -57,7 +57,7 @@ func TestMigrate_CreatesTablesOnFreshDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate returned error: %v", err)
 	}
-	for _, table := range []string{"requests", "test_configs", "runs", "global_auth"} {
+	for _, table := range []string{"requests", "test_configs", "runs", "global_auth", "insights"} {
 		var name string
 		row := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table)
 		if err := row.Scan(&name); err != nil {
@@ -399,5 +399,56 @@ func TestListRuns(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Errorf("len: got %d, want 2", len(list))
+	}
+}
+
+func TestInsightLifecycle(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	pending, started, err := store.StartInsight(db, "run-insight", "ollama", "qwen2.5:3b")
+	if err != nil || !started || pending.Status != store.InsightPending {
+		t.Fatalf("StartInsight = %+v, %v, %v; want pending started", pending, started, err)
+	}
+	if _, started, err := store.StartInsight(db, "run-insight", "ollama", "qwen2.5:3b"); err != nil || started {
+		t.Fatalf("duplicate StartInsight started=%v err=%v, want existing pending", started, err)
+	}
+	if err := store.CompleteInsight(db, "run-insight", "ollama", "qwen2.5:3b", "The run completed."); err != nil {
+		t.Fatalf("CompleteInsight: %v", err)
+	}
+	got, err := store.GetInsight(db, "run-insight")
+	if err != nil {
+		t.Fatalf("GetInsight: %v", err)
+	}
+	if got.Status != store.InsightDone || got.Text != "The run completed." || got.Analyzer != "ollama" || got.Model != "qwen2.5:3b" || got.CreatedAt.IsZero() {
+		t.Errorf("completed insight = %+v", got)
+	}
+	if _, started, err := store.StartInsight(db, "run-insight", "rules", "rules-v1"); err != nil || !started {
+		t.Fatalf("StartInsight after completion started=%v err=%v, want regeneration", started, err)
+	}
+}
+
+func TestFailPendingInsights(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, _, err := store.StartInsight(db, "run-pending", "rules", "rules-v1"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+	count, err := store.FailPendingInsights(db, "generation interrupted by server restart")
+	if err != nil || count != 1 {
+		t.Fatalf("FailPendingInsights = %d, %v; want 1, nil", count, err)
+	}
+	got, err := store.GetInsight(db, "run-pending")
+	if err != nil {
+		t.Fatalf("GetInsight: %v", err)
+	}
+	if got.Status != store.InsightFailed || got.Error != "generation interrupted by server restart" {
+		t.Errorf("recovered insight = %+v", got)
 	}
 }

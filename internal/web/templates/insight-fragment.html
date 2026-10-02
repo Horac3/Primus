@@ -1,0 +1,18 @@
+{{define "insight-fragment"}}
+<div id="run-insight-{{.RunID}}"{{if and .Insight (eq .Insight.Status "pending")}} hx-get="/runs/{{.RunID}}/insights" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+  {{if and .Insight (eq .Insight.Status "pending")}}
+  <p>Generating...</p>
+  {{else}}
+    {{if .Insight}}
+    <p class="muted" style="margin-bottom:.25rem; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em;">Run insight</p>
+    <p><strong>{{.Insight.Analyzer}} / {{.Insight.Model}}</strong></p>
+    {{end}}
+    {{if and .Insight (eq .Insight.Status "done")}}
+    <p>{{.Insight.Text}}</p>
+    {{else if and .Insight (eq .Insight.Status "failed")}}
+    <p class="muted">Insight generation failed: {{.Insight.Error}}</p>
+    {{end}}
+    <button type="button" hx-post="/runs/{{.RunID}}/insights" hx-target="#run-insight-{{.RunID}}" hx-swap="outerHTML">Generate insights</button>
+  {{end}}
+</div>
+{{end}}

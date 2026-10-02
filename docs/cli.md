@@ -60,3 +60,20 @@ primus run <config.json> [--db <path>]
 Exit `0` keeps the pipeline green; `1` fails the build on a real test
 failure; `2` fails it on a misconfigured step — distinguishable at a
 glance in the job log.
+
+## Local Ollama service
+
+From the `deploy/` directory, start Primus with the optional Ollama service:
+
+```sh
+docker compose --profile ai up --build -d
+docker compose exec ollama ollama pull qwen2.5:3b
+```
+
+For NVIDIA GPU access, install and configure the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), then start with the GPU override:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up --build -d
+```
+
+The Ollama service keeps downloaded models in the `ollama-models` volume. The current Primus analyzer supports `rules` only; `PRIMUS_ANALYZER=ollama` currently falls back to rules and does not send requests to Ollama.

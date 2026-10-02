@@ -174,6 +174,8 @@ type Point struct {
 type Run struct {
 	ID               string            `json:"id"`
 	TestConfigID     string            `json:"test_config_id"`
+	Mode             Mode              `json:"mode,omitempty"`
+	Concurrency      int               `json:"concurrency,omitempty"`
 	StartedAt        time.Time         `json:"started_at"`
 	FinishedAt       time.Time         `json:"finished_at"`
 	Summary          RunSummary        `json:"summary"`
