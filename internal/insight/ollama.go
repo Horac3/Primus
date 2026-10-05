@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,6 +19,8 @@ import (
 const defaultLLMTimeout = 90 * time.Second
 
 var numberPattern = regexp.MustCompile(`[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?`)
+var ordinalSuffixPattern = regexp.MustCompile(`(?i)^(?:st|nd|rd|th)\b`)
+var percentageSuffixPattern = regexp.MustCompile(`(?i)^\s*(?:%|percent(?:age)?\b)`)
 
 type OllamaAnalyzer struct {
 	URL    string
@@ -86,7 +91,7 @@ func (a OllamaAnalyzer) Analyze(ctx context.Context, summary Summary, findings [
 	requestBody := ollamaChatRequest{
 		Model: a.Model,
 		Messages: []ollamaMessage{
-			{Role: "system", Content: "Explain load test results for a developer. Use only numbers present in the input JSON. Never invent numbers or causes not supported by the findings. Be brief."},
+			{Role: "system", Content: "Explain load test results for a developer. Use only numbers present in the input JSON. When citing a value from the input, keep its original unit and precision. Never invent numbers or causes not supported by the findings. Be brief."},
 			{Role: "user", Content: string(inputJSON)},
 		},
 		Stream:    false,
@@ -131,6 +136,10 @@ func (a OllamaAnalyzer) Analyze(ctx context.Context, summary Summary, findings [
 	textParts = append(textParts, generated.NextSteps...)
 	text := strings.Join(textParts, " ")
 	if err := verifyInsightNumbers(text, inputJSON); err != nil {
+		slog.Debug("Ollama insight rejected by numeric grounding check",
+			"response", chatResponse.Message.Content,
+			"error", err,
+		)
 		return Insight{}, err
 	}
 	return Insight{
@@ -162,29 +171,35 @@ func ollamaInsightSchema() map[string]any {
 }
 
 func verifyInsightNumbers(text string, inputJSON []byte) error {
-	allowed := make(map[string]struct{})
+	allowed := make([]float64, 0)
 	var input any
 	decoder := json.NewDecoder(bytes.NewReader(inputJSON))
 	decoder.UseNumber()
 	if err := decoder.Decode(&input); err != nil {
 		return fmt.Errorf("decode Ollama analysis input for number check: %w", err)
 	}
-	collectInputNumbers(input, allowed)
-	for _, number := range numbersInText(text) {
-		if _, ok := allowed[number]; !ok {
+	collectInputNumbers(input, &allowed)
+	for _, index := range numberPattern.FindAllStringIndex(text, -1) {
+		if numberIsEmbedded(text, index[0]) || ordinalSuffixPattern.MatchString(text[index[1]:]) {
+			continue
+		}
+		number := text[index[0]:index[1]]
+		outputNumber, err := strconv.ParseFloat(number, 64)
+		if err != nil || (!isGrounded(outputNumber, allowed) &&
+			!(percentageSuffixPattern.MatchString(text[index[1]:]) && isRoundedPercentage(number, allowed))) {
 			return fmt.Errorf("Ollama insight contains unsupported number %q", number)
 		}
 	}
 	return nil
 }
 
-func collectInputNumbers(value any, numbers map[string]struct{}) {
+func collectInputNumbers(value any, numbers *[]float64) {
 	switch typed := value.(type) {
 	case json.Number:
-		numbers[string(typed)] = struct{}{}
+		appendGroundingNumber(string(typed), numbers)
 	case string:
 		for _, number := range numbersInText(typed) {
-			numbers[number] = struct{}{}
+			appendGroundingNumber(number, numbers)
 		}
 	case []any:
 		for _, item := range typed {
@@ -193,24 +208,109 @@ func collectInputNumbers(value any, numbers map[string]struct{}) {
 	case map[string]any:
 		for key, item := range typed {
 			if numberPattern.MatchString(key) && numberPattern.FindString(key) == key {
-				numbers[key] = struct{}{}
+				appendGroundingNumber(key, numbers)
 			}
 			collectInputNumbers(item, numbers)
 		}
 	}
 }
 
+func appendGroundingNumber(number string, numbers *[]float64) {
+	value, err := strconv.ParseFloat(number, 64)
+	if err == nil && !math.IsInf(value, 0) && !math.IsNaN(value) {
+		*numbers = append(*numbers, value)
+	}
+}
+
+func isGrounded(outputNumber float64, inputNumbers []float64) bool {
+	if math.IsInf(outputNumber, 0) || math.IsNaN(outputNumber) {
+		return false
+	}
+	for _, inputNumber := range inputNumbers {
+		for _, candidate := range [...]float64{inputNumber, inputNumber * 100, inputNumber / 100} {
+			if math.IsInf(candidate, 0) || math.IsNaN(candidate) {
+				continue
+			}
+			if candidate == 0 {
+				if math.Abs(outputNumber) < 1e-6 {
+					return true
+				}
+				continue
+			}
+			relativeDifference := math.Abs(outputNumber-candidate) / math.Abs(candidate)
+			if relativeDifference < 0.02 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isRoundedPercentage(output string, inputNumbers []float64) bool {
+	outputNumber, err := strconv.ParseFloat(output, 64)
+	if err != nil || math.IsInf(outputNumber, 0) || math.IsNaN(outputNumber) {
+		return false
+	}
+	decimalPlaces, err := displayedDecimalPlaces(output)
+	if err != nil || decimalPlaces > 308 {
+		return false
+	}
+	roundingTolerance := 0.5 * math.Pow(10, -float64(decimalPlaces))
+	for _, inputNumber := range inputNumbers {
+		percentage := inputNumber * 100
+		if math.IsInf(percentage, 0) || math.IsNaN(percentage) {
+			continue
+		}
+		if math.Abs(outputNumber-percentage) <= roundingTolerance {
+			return true
+		}
+	}
+	return false
+}
+
+func displayedDecimalPlaces(number string) (int, error) {
+	mantissa := number
+	exponent := 0
+	if exponentIndex := strings.IndexAny(number, "eE"); exponentIndex >= 0 {
+		mantissa = number[:exponentIndex]
+		var err error
+		exponent, err = strconv.Atoi(number[exponentIndex+1:])
+		if err != nil {
+			return 0, err
+		}
+	}
+	decimalPlaces := 0
+	if decimalIndex := strings.IndexByte(mantissa, '.'); decimalIndex >= 0 {
+		decimalPlaces = len(mantissa) - decimalIndex - 1
+	}
+	decimalPlaces -= exponent
+	if decimalPlaces < 0 {
+		decimalPlaces = 0
+	}
+	return decimalPlaces, nil
+}
+
 func numbersInText(text string) []string {
 	indices := numberPattern.FindAllStringIndex(text, -1)
 	numbers := make([]string, 0, len(indices))
 	for _, index := range indices {
-		if index[0] > 0 {
-			previous := text[index[0]-1]
-			if previous == '_' || previous >= 'a' && previous <= 'z' || previous >= 'A' && previous <= 'Z' || previous >= '0' && previous <= '9' {
-				continue
-			}
+		if numberIsEmbedded(text, index[0]) {
+			continue
+		}
+		// Ordinals such as "95th" identify a metric, not a measured value.
+		if ordinalSuffixPattern.MatchString(text[index[1]:]) {
+			continue
 		}
 		numbers = append(numbers, text[index[0]:index[1]])
 	}
 	return numbers
+}
+
+func numberIsEmbedded(text string, start int) bool {
+	if start == 0 {
+		return false
+	}
+	previous := text[start-1]
+	return previous == '_' || previous >= 'a' && previous <= 'z' ||
+		previous >= 'A' && previous <= 'Z' || previous >= '0' && previous <= '9'
 }

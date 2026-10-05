@@ -1,8 +1,10 @@
 package insight
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,6 +47,9 @@ func TestOllamaAnalyzerAnalyze(t *testing.T) {
 			if !strings.Contains(strings.ToLower(request.Messages[0].Content), "never invent numbers") {
 				t.Errorf("system message missing guardrail: %q", request.Messages[0].Content)
 			}
+			if !strings.Contains(strings.ToLower(request.Messages[0].Content), "original unit and precision") {
+				t.Errorf("system message missing number-format guidance: %q", request.Messages[0].Content)
+			}
 			if !strings.Contains(request.Messages[1].Content, `"p95_millis":120`) || !strings.Contains(request.Messages[1].Content, `"findings"`) {
 				t.Errorf("user message missing summary/findings JSON: %s", request.Messages[1].Content)
 			}
@@ -80,6 +85,167 @@ func TestOllamaAnalyzerRejectsInventedNumber(t *testing.T) {
 	_, err := analyzer.Analyze(context.Background(), Summary{P95Millis: 120}, nil)
 	if err == nil || !strings.Contains(err.Error(), `unsupported number "99"`) {
 		t.Fatalf("Analyze error = %v, want invented-number guardrail error", err)
+	}
+}
+
+func TestOllamaAnalyzerLogsRejectedInsightAtDebug(t *testing.T) {
+	// Arrange
+	rawInsightJSON := `{"headline":"Uptime was 87.65 percent","explanation":"The run was successful.","next_steps":["Review the run."]}`
+	responseBody, err := json.Marshal(map[string]any{
+		"message": map[string]string{"content": rawInsightJSON},
+	})
+	if err != nil {
+		t.Fatalf("marshal mock response: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(responseBody)
+	}))
+	defer server.Close()
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	analyzer := OllamaAnalyzer{URL: server.URL, Model: "test-model", Client: server.Client()}
+
+	// Act
+	_, err = analyzer.Analyze(context.Background(), Summary{P95Millis: 104}, nil)
+
+	// Assert
+	if err == nil {
+		t.Fatal("Analyze succeeded, want grounding error")
+	}
+	var entry struct {
+		Level    string `json:"level"`
+		Message  string `json:"msg"`
+		Response string `json:"response"`
+	}
+	if decodeErr := json.Unmarshal(logs.Bytes(), &entry); decodeErr != nil {
+		t.Fatalf("decode debug log %q: %v", logs.String(), decodeErr)
+	}
+	if entry.Level != "DEBUG" || entry.Response != rawInsightJSON {
+		t.Errorf("debug log entry = %+v, want full rejected response", entry)
+	}
+}
+
+func TestVerifyInsightNumbersGroundsActualRunOutput(t *testing.T) {
+	// Arrange
+	input, err := json.Marshal(struct {
+		Summary  Summary   `json:"summary"`
+		Findings []Finding `json:"findings"`
+	}{
+		Summary: Summary{
+			RequestsPerSecond: 103.98910573732108,
+			ErrorRate:         0.0019230769230769232,
+		},
+		Findings: []Finding{},
+	})
+	if err != nil {
+		t.Fatalf("marshal actual run summary values: %v", err)
+	}
+	output := "The error rate was 0.001923 and throughput was 103.989 requests per second."
+
+	// Act
+	err = verifyInsightNumbers(output, input)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("verifyInsightNumbers rejected output using the run's actual summary values: %v", err)
+	}
+}
+
+func TestVerifyInsightNumbersAcceptsActualQwenResponseForStoredRun(t *testing.T) {
+	// Arrange
+	input := []byte(`{
+		"summary": {
+			"p50_millis": 44,
+			"p95_millis": 58,
+			"p99_millis": 150,
+			"request_count": 1040,
+			"requests_per_second": 103.98910573732108,
+			"error_count": 2,
+			"error_rate": 0.0019230769230769232,
+			"status_counts": {"200": 1038},
+			"failure_causes": [{"cause": "context deadline exceeded", "count": 2}],
+			"latency_buckets": [{"lower_bound_ms": 0, "upper_bound_ms": 50, "count": 794}],
+			"average_latency_ms": 47.35163776493256,
+			"concurrency": 5
+		},
+		"findings": []
+	}`)
+	rawInsightJSON := `{"explanation":"The load test achieved 103.99 requests per second with a 200 status code for all requests. However, 2 out of 1040 requests failed with a 'context deadline exceeded' error. The average response time was 47.35 ms, with 95th percentile at 58 ms and 99th percentile at 150 ms. The test had 2 failures, both due to client timeout. No assertions were configured, so no pass/fail criteria were applied. Latency distribution shows most requests (794) had response times between 0-50 ms, with a few requests taking longer. The test was run at a concurrency level of 5. All failures were due to client timeout issues.","headline":"Client Timeout Failures: 2 out of 1040 requests failed with context deadline exceeded error, average response time 47.35 ms, 95th percentile 58 ms, 99th percentile 150 ms, concurrency 5, no assertions configured for pass/fail criteria.","next_steps":["Investigate the root cause of the context deadline exceeded errors.","Adjust the client timeout settings if necessary.","Consider adding more concurrency to improve throughput."]}`
+	var generated ollamaInsight
+	if err := json.Unmarshal([]byte(rawInsightJSON), &generated); err != nil {
+		t.Fatalf("unmarshal captured Ollama response: %v", err)
+	}
+	output := strings.Join(append([]string{generated.Headline, generated.Explanation}, generated.NextSteps...), " ")
+
+	// Act
+	err := verifyInsightNumbers(output, input)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("verifyInsightNumbers rejected captured Ollama output for the stored run: %v", err)
+	}
+}
+
+func TestVerifyInsightNumbersToleratesEquivalentAndRejectsFabricatedNumbers(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		output string
+		wantOK bool
+	}{
+		{
+			name:   "fraction restated as percentage",
+			input:  `{"summary":{"error_rate":0.0019}}`,
+			output: "The error rate was 0.19 percent.",
+			wantOK: true,
+		},
+		{
+			name:   "percentage rounded to shown precision",
+			input:  `{"summary":{"error_rate":0.0019230769230769232}}`,
+			output: "The error rate was 0.2%.",
+			wantOK: true,
+		},
+		{
+			name:   "percentage restated as fraction",
+			input:  `{"summary":{"error_rate":0.19}}`,
+			output: "The error rate was 0.0019.",
+			wantOK: true,
+		},
+		{
+			name:   "rounding within tolerance",
+			input:  `{"summary":{"latency_ms":104}}`,
+			output: "Latency was 103.989 ms.",
+			wantOK: true,
+		},
+		{
+			name:   "outside tolerance",
+			input:  `{"summary":{"latency_ms":104}}`,
+			output: "Latency was 250 ms.",
+			wantOK: false,
+		},
+		{
+			name:   "fabricated uptime percentage",
+			input:  `{"summary":{"request_count":10,"error_rate":0.2}}`,
+			output: "The service had 87.65 percent uptime.",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			input := []byte(tt.input)
+
+			// Act
+			err := verifyInsightNumbers(tt.output, input)
+
+			// Assert
+			if gotOK := err == nil; gotOK != tt.wantOK {
+				t.Errorf("verifyInsightNumbers() error = %v, want accepted = %v", err, tt.wantOK)
+			}
+		})
 	}
 }
 

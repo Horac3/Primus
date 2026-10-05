@@ -543,17 +543,59 @@ func TestRunInsightAsyncLifecycleAndReuse(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !strings.Contains(finalBody, "ollama") || !strings.Contains(finalBody, "test-model") || strings.Contains(finalBody, `hx-trigger="every 2s"`) {
+	if !strings.Contains(finalBody, "via ollama") || !strings.Contains(finalBody, "test-model") || strings.Contains(finalBody, `hx-trigger="every 2s"`) {
 		t.Fatalf("final insight fragment = %s", finalBody)
 	}
 
 	page := httptest.NewRecorder()
 	mux.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/runs/run-insight", nil))
-	if !strings.Contains(page.Body.String(), "Run finished") || !strings.Contains(page.Body.String(), "test-model") {
+	if !strings.Contains(page.Body.String(), "Run finished") || !strings.Contains(page.Body.String(), "via ollama") || !strings.Contains(page.Body.String(), "test-model") {
 		t.Fatalf("reopened run page did not reuse insight: %s", page.Body.String())
 	}
 	if calls.Load() != 1 {
 		t.Errorf("analyzer calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestRunInsightDisplaysRulesFallbackAnalyzer(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"message":{"content":"{\"headline\":\"Uptime was 87.65 percent\",\"explanation\":\"The run was successful.\",\"next_steps\":[\"Review the run.\"]}"}}`))
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+	t.Setenv("PRIMUS_LLM_TIMEOUT", "2s")
+
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-rules-fallback", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	// Act
+	post := httptest.NewRecorder()
+	mux.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/runs/run-rules-fallback/insights", nil))
+	deadline := time.Now().Add(2 * time.Second)
+	var finalBody string
+	for time.Now().Before(deadline) {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/run-rules-fallback/insights", nil))
+		finalBody = response.Body.String()
+		if strings.Contains(finalBody, "via rules") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Assert
+	if post.Code != http.StatusOK || !strings.Contains(post.Body.String(), "Generating...") {
+		t.Fatalf("POST insight response = %d %s", post.Code, post.Body.String())
+	}
+	if !strings.Contains(finalBody, "via rules") || !strings.Contains(finalBody, "No assertions were configured") {
+		t.Fatalf("fallback insight fragment = %s", finalBody)
 	}
 }
 

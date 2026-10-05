@@ -5,7 +5,7 @@
   {{else}}
     {{if .Insight}}
     <p class="muted" style="margin-bottom:.25rem; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em;">Run insight</p>
-    <p><strong>{{.Insight.Analyzer}} / {{.Insight.Model}}</strong></p>
+    <p><strong>via {{.Insight.Analyzer}} ({{.Insight.Model}})</strong></p>
     {{end}}
     {{if and .Insight (eq .Insight.Status "done")}}
     <p>{{.Insight.Text}}</p>

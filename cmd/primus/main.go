@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -13,6 +14,8 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
 	if len(os.Args) > 1 && os.Args[1] == "run" {
 		// "primus run <config.json> [--db <path>]"
 		fs := flag.NewFlagSet("run", flag.ExitOnError)
