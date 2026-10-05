@@ -13,6 +13,7 @@ const defaultGeneratorTimeout = 90 * time.Second
 
 type Generator interface {
 	GenerateRequest(ctx context.Context, description string, endpoints []Endpoint) (RequestSuggestion, error)
+	GenerateTestConfig(ctx context.Context, description string, endpoint Endpoint, bounds Bounds) (TestConfigSuggestion, error)
 }
 
 type Config struct {
@@ -20,6 +21,7 @@ type Config struct {
 	URL      string
 	Model    string
 	Timeout  time.Duration
+	Bounds   Bounds
 }
 
 type Endpoint struct {
@@ -34,6 +36,11 @@ type RequestPrompt struct {
 	Endpoints   []Endpoint `json:"endpoints"`
 }
 
+type TestConfigPrompt struct {
+	Description string   `json:"description"`
+	Endpoint    Endpoint `json:"endpoint"`
+}
+
 type RequestSuggestion struct {
 	MatchedExistingID *string           `json:"matched_existing_id"`
 	Method            string            `json:"method"`
@@ -43,11 +50,22 @@ type RequestSuggestion struct {
 	ConfidenceNote    string            `json:"confidence_note"`
 }
 
+type TestConfigSuggestion struct {
+	Mode            string `json:"mode"`
+	Concurrency     int    `json:"concurrency"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	TotalRequests   int    `json:"total_requests,omitempty"`
+	Reasoning       string `json:"reasoning"`
+}
+
 func NewGenerator(config Config) (Generator, error) {
 	switch strings.ToLower(strings.TrimSpace(config.Analyzer)) {
 	case "", "rules":
 		return nil, nil
 	case "ollama":
+		if config.Bounds == (Bounds{}) {
+			config.Bounds = DefaultBounds()
+		}
 		return NewOllamaGenerator(config)
 	default:
 		return nil, fmt.Errorf("unsupported author generator %q", config.Analyzer)

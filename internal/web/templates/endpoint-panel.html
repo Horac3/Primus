@@ -71,6 +71,19 @@
     <span id="probe-spinner" class="htmx-indicator muted">testing…</span>
   </div>
 
+  {{if and .AuthoringEnabled (not .IsNew)}}
+  <section class="card">
+    <h2 style="margin-top:0">Describe a test</h2>
+    <label>
+      <span>What load should this endpoint receive?</span>
+      <textarea id="nl-testconfig-description" rows="2" placeholder="Simulate 200 users hammering this for 2 minutes"></textarea>
+    </label>
+    <button type="button" class="secondary" style="margin-top:.5rem" data-request-id="{{.Def.ID}}" onclick="generateTestConfig(this.dataset.requestId)">Generate test config</button>
+    <p id="nl-testconfig-status" class="muted" role="status" style="margin-top:.35rem"></p>
+    <p id="nl-testconfig-reasoning" class="muted" style="margin-top:.25rem"></p>
+  </section>
+  {{end}}
+
   <h2>Test</h2>
   <div class="row">
     <label>

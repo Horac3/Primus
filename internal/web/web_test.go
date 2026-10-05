@@ -1501,3 +1501,129 @@ func TestRequestPanelHidesNaturalLanguageControlsWithoutOllama(t *testing.T) {
 		t.Errorf("NL authoring controls should be hidden when Ollama is not selected: %s", response.Body.String())
 	}
 }
+
+func TestPostNLTestConfigFillsBoundedValuesWithoutSaving(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Ollama request: %v", err)
+			return
+		}
+		var input author.TestConfigPrompt
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil {
+			t.Errorf("decode prompt: %v", err)
+			return
+		}
+		if input.Endpoint.ID != "ep-login" || input.Endpoint.URL != "https://api.example.com/login" {
+			t.Errorf("endpoint context = %+v, want selected endpoint metadata only", input.Endpoint)
+		}
+		var content string
+		switch {
+		case strings.Contains(strings.ToLower(input.Description), "soak"):
+			content = `{"mode":"soak","concurrency":20,"duration_seconds":3600,"total_requests":null,"reasoning":"Soak mode runs for one hour at 20 concurrent workers."}`
+		case strings.Contains(strings.ToLower(input.Description), "burst"):
+			content = `{"mode":"burst","concurrency":10,"duration_seconds":null,"total_requests":1000,"reasoning":"Burst mode sends the requested 1000 total requests."}`
+		case strings.Contains(strings.ToLower(input.Description), "extreme"):
+			content = `{"mode":"load","concurrency":999999,"duration_seconds":99999999,"total_requests":null,"reasoning":"Extreme load requested."}`
+		default:
+			content = `{"mode":"load","concurrency":200,"duration_seconds":120,"total_requests":null,"reasoning":"A two-minute load run with 200 concurrent workers matches the request."}`
+		}
+		response, err := json.Marshal(map[string]any{"message": map[string]string{"content": content}})
+		if err != nil {
+			t.Errorf("marshal response: %v", err)
+			return
+		}
+		_, _ = w.Write(response)
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+		ID: "ep-login", Name: "Login", Method: "POST", URLTemplate: "https://api.example.com/login",
+		Body: &model.BodyTemplate{Raw: []byte(`{"password":"private"}`)},
+	}); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	mux := web.NewServer(db)
+	tests := []struct {
+		name        string
+		description string
+		want        author.TestConfigSuggestion
+	}{
+		{
+			name: "load", description: "Simulate 200 users hammering this for 2 minutes",
+			want: author.TestConfigSuggestion{Mode: "load", Concurrency: 200, DurationSeconds: 120, Reasoning: "A two-minute load run with 200 concurrent workers matches the request."},
+		},
+		{
+			name: "soak", description: "Run a one-hour soak with 20 users",
+			want: author.TestConfigSuggestion{Mode: "soak", Concurrency: 20, DurationSeconds: 3600, Reasoning: "Soak mode runs for one hour at 20 concurrent workers."},
+		},
+		{
+			name: "burst", description: "Send 1000 requests in bursts with 10 workers",
+			want: author.TestConfigSuggestion{Mode: "burst", Concurrency: 10, TotalRequests: 1000, Reasoning: "Burst mode sends the requested 1000 total requests."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			payload, err := json.Marshal(map[string]string{"request_id": "ep-login", "description": tt.description})
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/nl/testconfig", bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// Act
+			mux.ServeHTTP(response, request)
+
+			// Assert
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var got author.TestConfigSuggestion
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode suggestion: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("suggestion = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+
+	// Act
+	extremePayload, err := json.Marshal(map[string]string{"request_id": "ep-login", "description": "Use an extreme unbounded test"})
+	if err != nil {
+		t.Fatalf("marshal extreme request: %v", err)
+	}
+	extremeRequest := httptest.NewRequest(http.MethodPost, "/nl/testconfig", bytes.NewReader(extremePayload))
+	extremeRequest.Header.Set("Content-Type", "application/json")
+	extremeResponse := httptest.NewRecorder()
+	mux.ServeHTTP(extremeResponse, extremeRequest)
+
+	// Assert
+	if extremeResponse.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(extremeResponse.Body.String(), "concurrency 999999 exceeds maximum 2000") {
+		t.Fatalf("extreme response = %d %s, want explicit bounds rejection", extremeResponse.Code, extremeResponse.Body.String())
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(configs) != 0 || len(runs) != 0 {
+		t.Errorf("generation saved configs/runs: %d/%d, want none", len(configs), len(runs))
+	}
+}

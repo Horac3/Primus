@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -273,7 +274,12 @@ func NewServerWithTemplateDir(db *sql.DB, templateDir string) *http.ServeMux {
 func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux {
 	mux := http.NewServeMux()
 	analyzer := configuredInsightAnalyzer()
-	generator := configuredAuthorGenerator()
+	bounds, err := author.LoadBounds(os.Getenv)
+	if err != nil {
+		log.Printf("web: load author generation limits: %v; using defaults", err)
+		bounds = author.DefaultBounds()
+	}
+	generator := configuredAuthorGenerator(bounds)
 	if _, err := store.FailPendingInsights(db, "insight generation interrupted by server restart"); err != nil {
 		log.Printf("web: recover pending insights: %v", err)
 	}
@@ -295,6 +301,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("GET /sidebar-fragment", sidebarHandler(db, tmpl))
 	mux.HandleFunc("GET /requests/{id}", requestPanelHandler(db, tmpl, generator != nil))
 	mux.HandleFunc("POST /nl/request", postNLRequestHandler(db, generator))
+	mux.HandleFunc("POST /nl/testconfig", postNLTestConfigHandler(db, generator, bounds))
 	mux.HandleFunc("POST /import", importHandler(db, tmpl, generator != nil))
 	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
 	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg))
@@ -310,7 +317,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	return mux
 }
 
-func configuredAuthorGenerator() author.Generator {
+func configuredAuthorGenerator(bounds author.Bounds) author.Generator {
 	config, err := insight.LoadConfig()
 	if err != nil {
 		log.Printf("web: load author generator config: %v", err)
@@ -321,6 +328,7 @@ func configuredAuthorGenerator() author.Generator {
 		URL:      config.LLMURL,
 		Model:    config.LLMModel,
 		Timeout:  config.LLMTimeout,
+		Bounds:   bounds,
 	})
 	if err != nil {
 		log.Printf("web: configure author generator: %v; natural-language authoring disabled", err)
@@ -549,6 +557,53 @@ func postNLRequestHandler(db *sql.DB, generator author.Generator) http.HandlerFu
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		if err := json.NewEncoder(w).Encode(suggestion); err != nil {
 			log.Printf("web: encode generated request definition: %v", err)
+		}
+	}
+}
+
+func postNLTestConfigHandler(db *sql.DB, generator author.Generator, bounds author.Bounds) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if generator == nil {
+			http.Error(w, "natural-language authoring is unavailable; configure PRIMUS_ANALYZER=ollama", http.StatusServiceUnavailable)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		var input struct {
+			RequestID   string `json:"request_id"`
+			Description string `json:"description"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		input.RequestID = strings.TrimSpace(input.RequestID)
+		if input.RequestID == "" || strings.TrimSpace(input.Description) == "" {
+			http.Error(w, "request_id and description are required", http.StatusBadRequest)
+			return
+		}
+		definition, err := store.GetRequestDefinition(db, input.RequestID)
+		if err != nil {
+			http.Error(w, "load endpoint: "+err.Error(), http.StatusNotFound)
+			return
+		}
+		suggestion, err := generator.GenerateTestConfig(r.Context(), input.Description, author.Endpoint{
+			ID: definition.ID, Name: definition.Name, Method: definition.Method, URL: definition.URLTemplate,
+		}, bounds)
+		if err != nil {
+			log.Printf("web: generate test config: %v", err)
+			http.Error(w, "test config generation rejected: "+err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		if err := author.ValidateTestConfigSuggestion(suggestion, bounds); err != nil {
+			log.Printf("web: generated test config failed server validation: %v", err)
+			http.Error(w, "test config generation rejected: "+err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if err := json.NewEncoder(w).Encode(suggestion); err != nil {
+			log.Printf("web: encode generated test config: %v", err)
 		}
 	}
 }

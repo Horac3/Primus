@@ -177,3 +177,177 @@ func TestOllamaGeneratorUsesConfiguredTimeout(t *testing.T) {
 		t.Errorf("GenerateRequest took more than one second with 20 ms timeout")
 	}
 }
+
+func TestOllamaGeneratorGenerateTestConfigTable(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		content     string
+		want        TestConfigSuggestion
+	}{
+		{
+			name:        "load test",
+			description: "Simulate 200 users hammering this for 2 minutes",
+			content:     `{"mode":"load","concurrency":200,"duration_seconds":120,"total_requests":null,"reasoning":"A two-minute load run with 200 concurrent workers matches the request."}`,
+			want:        TestConfigSuggestion{Mode: "load", Concurrency: 200, DurationSeconds: 120, Reasoning: "A two-minute load run with 200 concurrent workers matches the request."},
+		},
+		{
+			name:        "soak test",
+			description: "Run a 1 hour soak with 20 users",
+			content:     `{"mode":"soak","concurrency":20,"duration_seconds":3600,"total_requests":null,"reasoning":"Soak mode runs for the requested hour at 20 workers."}`,
+			want:        TestConfigSuggestion{Mode: "soak", Concurrency: 20, DurationSeconds: 3600, Reasoning: "Soak mode runs for the requested hour at 20 workers."},
+		},
+		{
+			name:        "burst test",
+			description: "Send 1000 requests in bursts with 10 workers",
+			content:     `{"mode":"burst","concurrency":10,"duration_seconds":null,"total_requests":1000,"reasoning":"Burst mode uses the requested 1000-request count."}`,
+			want:        TestConfigSuggestion{Mode: "burst", Concurrency: 10, TotalRequests: 1000, Reasoning: "Burst mode uses the requested 1000-request count."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				body, err := json.Marshal(map[string]any{"message": map[string]string{"content": tt.content}})
+				if err != nil {
+					t.Errorf("marshal response: %v", err)
+					return
+				}
+				_, _ = w.Write(body)
+			}))
+			defer server.Close()
+			generator := OllamaGenerator{URL: server.URL, Model: "test-model", Client: server.Client()}
+
+			// Act
+			got, err := generator.GenerateTestConfig(context.Background(), tt.description, Endpoint{
+				ID: "ep-1", Name: "Login", Method: "POST", URL: "https://api.example.com/login",
+			}, DefaultBounds())
+
+			// Assert
+			if err != nil {
+				t.Fatalf("GenerateTestConfig: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("GenerateTestConfig() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateTestConfigSuggestionRejectsOutOfBoundsWithoutClamping(t *testing.T) {
+	tests := []struct {
+		name       string
+		suggestion TestConfigSuggestion
+		wantError  string
+	}{
+		{
+			name:       "concurrency above ceiling",
+			suggestion: TestConfigSuggestion{Mode: "load", Concurrency: 2001, DurationSeconds: 30, Reasoning: "extreme"},
+			wantError:  "concurrency 2001 exceeds maximum 2000",
+		},
+		{
+			name:       "duration above ceiling",
+			suggestion: TestConfigSuggestion{Mode: "soak", Concurrency: 5, DurationSeconds: 3601, Reasoning: "extreme"},
+			wantError:  "duration_seconds 3601 exceeds maximum 3600",
+		},
+		{
+			name:       "request count above ceiling",
+			suggestion: TestConfigSuggestion{Mode: "burst", Concurrency: 5, TotalRequests: 1000001, Reasoning: "extreme"},
+			wantError:  "total_requests 1000001 exceeds maximum 1000000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			bounds := DefaultBounds()
+
+			// Act
+			err := ValidateTestConfigSuggestion(tt.suggestion, bounds)
+
+			// Assert
+			if err == nil || err.Error() != tt.wantError {
+				t.Fatalf("ValidateTestConfigSuggestion() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestValidateTestConfigSuggestionRejectsInvalidModesAndMissingStops(t *testing.T) {
+	tests := []struct {
+		name       string
+		suggestion TestConfigSuggestion
+	}{
+		{name: "unknown mode", suggestion: TestConfigSuggestion{Mode: "unbounded", Concurrency: 1, DurationSeconds: 1, Reasoning: "x"}},
+		{name: "load missing duration", suggestion: TestConfigSuggestion{Mode: "load", Concurrency: 1, Reasoning: "x"}},
+		{name: "soak with request count", suggestion: TestConfigSuggestion{Mode: "soak", Concurrency: 1, TotalRequests: 1, Reasoning: "x"}},
+		{name: "burst with duration", suggestion: TestConfigSuggestion{Mode: "burst", Concurrency: 1, DurationSeconds: 1, Reasoning: "x"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			bounds := DefaultBounds()
+
+			// Act
+			err := ValidateTestConfigSuggestion(tt.suggestion, bounds)
+
+			// Assert
+			if err == nil {
+				t.Fatalf("ValidateTestConfigSuggestion(%+v) succeeded, want rejection", tt.suggestion)
+			}
+		})
+	}
+}
+
+func TestValidateTestConfigSuggestionRequestsClarification(t *testing.T) {
+	// Arrange
+	suggestion := TestConfigSuggestion{
+		Mode: "load", Reasoning: "Clarification required: specify a concurrency value.",
+	}
+
+	// Act
+	err := ValidateTestConfigSuggestion(suggestion, DefaultBounds())
+
+	// Assert
+	if err == nil || err.Error() != suggestion.Reasoning {
+		t.Fatalf("ValidateTestConfigSuggestion() error = %v, want %q", err, suggestion.Reasoning)
+	}
+}
+
+func TestLoadBoundsDefaultsAndOverrides(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want Bounds
+	}{
+		{name: "defaults", env: map[string]string{}, want: DefaultBounds()},
+		{
+			name: "configured ceilings",
+			env: map[string]string{
+				"PRIMUS_AUTHOR_MAX_CONCURRENCY":      "150",
+				"PRIMUS_AUTHOR_MAX_DURATION_SECONDS": "7200",
+				"PRIMUS_AUTHOR_MAX_TOTAL_REQUESTS":   "25000",
+			},
+			want: Bounds{MaxConcurrency: 150, MaxDurationSeconds: 7200, MaxTotalRequests: 25000},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			getenv := func(key string) string { return tt.env[key] }
+
+			// Act
+			got, err := LoadBounds(getenv)
+
+			// Assert
+			if err != nil {
+				t.Fatalf("LoadBounds: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("LoadBounds() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

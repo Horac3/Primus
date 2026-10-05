@@ -132,6 +132,42 @@ async function generateRequestDefinition() {
     status.textContent = error.message || 'Request generation failed.';
   }
 }
+
+async function generateTestConfig(requestID) {
+  const description = document.getElementById('nl-testconfig-description').value.trim();
+  const status = document.getElementById('nl-testconfig-status');
+  const reasoning = document.getElementById('nl-testconfig-reasoning');
+  const form = document.getElementById('panel-form');
+  if (!description) {
+    status.textContent = 'Describe the test first.';
+    return;
+  }
+  status.textContent = 'Generating…';
+  reasoning.textContent = '';
+  try {
+    const response = await fetch('/nl/testconfig', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({request_id: requestID, description})
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const suggestion = await response.json();
+    const field = name => form.elements.namedItem(name);
+    field('mode').value = suggestion.mode;
+    field('mode').dispatchEvent(new Event('change'));
+    field('concurrency').value = suggestion.concurrency;
+    if (suggestion.duration_seconds !== undefined) {
+      field('duration_seconds').value = suggestion.duration_seconds;
+    }
+    if (suggestion.total_requests !== undefined) {
+      field('total_requests').value = suggestion.total_requests;
+    }
+    reasoning.textContent = suggestion.reasoning;
+    status.textContent = 'Fields filled for review. Nothing has been saved or run.';
+  } catch (error) {
+    status.textContent = error.message || 'Test config generation failed.';
+  }
+}
 </script>
 </body>
 </html>
