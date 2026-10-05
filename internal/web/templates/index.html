@@ -168,6 +168,30 @@ async function generateTestConfig(requestID) {
     status.textContent = error.message || 'Test config generation failed.';
   }
 }
+
+async function generatePayloads(requestID) {
+  const count = Number(document.getElementById('payload-count').value);
+  const status = document.getElementById('payload-status');
+  const pool = document.getElementById('payload-pool');
+  if (!Number.isInteger(count) || count < 1) {
+    status.textContent = 'Enter a positive number of payload variants.';
+    return;
+  }
+  pool.value = '[]';
+  status.textContent = 'Generating…';
+  try {
+    const response = await fetch(`/requests/${encodeURIComponent(requestID)}/payloads/generate?count=${encodeURIComponent(count)}`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    pool.value = JSON.stringify(result.payloads);
+    const cappedNote = result.capped ? ` (capped from ${result.requested_count} to ${result.generated_count})` : '';
+    status.textContent = `Generated ${result.generated_count} payload variants${cappedNote}. They will cycle during a run only after you submit the form.`;
+  } catch (error) {
+    status.textContent = error.message || 'Payload generation failed.';
+  }
+}
 </script>
 </body>
 </html>

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -261,6 +262,7 @@ func TestSaveAndGetTestConfig(t *testing.T) {
 		Concurrency:   5,
 		TotalRequests: 100,
 		Assertions:    model.Assertions{ExpectedStatus: []int{200}, MaxP95Millis: 300},
+		PayloadPool:   []json.RawMessage{json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`)},
 	}
 
 	// Act
@@ -284,6 +286,11 @@ func TestSaveAndGetTestConfig(t *testing.T) {
 	}
 	if len(got.Assertions.ExpectedStatus) != 1 || got.Assertions.ExpectedStatus[0] != 200 {
 		t.Errorf("Assertions.ExpectedStatus: got %v", got.Assertions.ExpectedStatus)
+	}
+	if len(got.PayloadPool) != len(want.PayloadPool) ||
+		string(got.PayloadPool[0]) != string(want.PayloadPool[0]) ||
+		string(got.PayloadPool[1]) != string(want.PayloadPool[1]) {
+		t.Errorf("PayloadPool: got %s, want %s", got.PayloadPool, want.PayloadPool)
 	}
 }
 

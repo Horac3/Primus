@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1485,8 +1486,14 @@ func TestRequestPanelHidesNaturalLanguageControlsWithoutOllama(t *testing.T) {
 	// Arrange
 	t.Setenv("PRIMUS_ANALYZER", "rules")
 	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+		ID: "ep-body", Name: "Body endpoint", Method: "POST", URLTemplate: "https://api.example.com/body",
+		Body: &model.BodyTemplate{Raw: []byte(`{"name":"example"}`)},
+	}); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
 	mux := web.NewServer(db)
-	request := httptest.NewRequest(http.MethodGet, "/requests/new", nil)
+	request := httptest.NewRequest(http.MethodGet, "/requests/ep-body", nil)
 	response := httptest.NewRecorder()
 
 	// Act
@@ -1497,8 +1504,158 @@ func TestRequestPanelHidesNaturalLanguageControlsWithoutOllama(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), "Generate from description") ||
-		strings.Contains(response.Body.String(), "Generate test config") {
+		strings.Contains(response.Body.String(), "Generate test config") ||
+		strings.Contains(response.Body.String(), "Generate sample data") {
 		t.Errorf("NL authoring controls should be hidden when Ollama is not selected: %s", response.Body.String())
+	}
+}
+
+func TestPostGeneratePayloadsCapsCountAndDoesNotPersist(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Ollama request: %v", err)
+			return
+		}
+		var input struct {
+			Template json.RawMessage `json:"template"`
+			Count    int             `json:"count"`
+		}
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil {
+			t.Errorf("decode generation input: %v", err)
+			return
+		}
+		if input.Count != author.MaxPayloadCount {
+			t.Errorf("generation count = %d, want cap %d", input.Count, author.MaxPayloadCount)
+		}
+		if string(input.Template) != `{"value":0}` {
+			t.Errorf("template = %s, want stored body template", input.Template)
+		}
+		payloads := make([]json.RawMessage, input.Count)
+		for i := range payloads {
+			payloads[i] = json.RawMessage(fmt.Sprintf(`{"value":%d}`, i+1))
+		}
+		content, err := json.Marshal(map[string]any{"payloads": payloads})
+		if err != nil {
+			t.Errorf("marshal payloads: %v", err)
+			return
+		}
+		response, err := json.Marshal(map[string]any{"message": map[string]string{"content": string(content)}})
+		if err != nil {
+			t.Errorf("marshal Ollama response: %v", err)
+			return
+		}
+		_, _ = w.Write(response)
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+		ID: "ep-body", Name: "Body endpoint", Method: "POST", URLTemplate: "https://api.example.com/body",
+		Body: &model.BodyTemplate{Raw: []byte(`{"value":0}`)},
+	}); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	mux := web.NewServer(db)
+	panelRequest := httptest.NewRequest(http.MethodGet, "/requests/ep-body", nil)
+	panelResponse := httptest.NewRecorder()
+	mux.ServeHTTP(panelResponse, panelRequest)
+	if panelResponse.Code != http.StatusOK || !strings.Contains(panelResponse.Body.String(), "Generate sample data") {
+		t.Fatalf("payload generation control not rendered for a body template: %d %s", panelResponse.Code, panelResponse.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodPost, "/requests/ep-body/payloads/generate?count=501", nil)
+	response := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(response, request)
+
+	// Assert
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var got struct {
+		Payloads       []json.RawMessage `json:"payloads"`
+		RequestedCount int               `json:"requested_count"`
+		GeneratedCount int               `json:"generated_count"`
+		Capped         bool              `json:"capped"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.RequestedCount != 501 || got.GeneratedCount != author.MaxPayloadCount ||
+		len(got.Payloads) != author.MaxPayloadCount || !got.Capped {
+		t.Fatalf("response metadata = requested %d generated %d payloads %d capped %v",
+			got.RequestedCount, got.GeneratedCount, len(got.Payloads), got.Capped)
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(configs) != 0 || len(runs) != 0 {
+		t.Errorf("payload generation persisted configs/runs: %d/%d, want none", len(configs), len(runs))
+	}
+}
+
+func TestRunsPersistsAndDispatchesGeneratedPayloadPool(t *testing.T) {
+	// Arrange
+	bodies := make(chan string, 3)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Value int `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request body: %v", err)
+			return
+		}
+		bodies <- fmt.Sprint(body.Value)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	form := url.Values{
+		"request_id":      {"ep-pool"},
+		"request_name":    {"Payload pool"},
+		"method":          {http.MethodPost},
+		"url":             {target.URL},
+		"body":            {`{"value":0}`},
+		"payload_pool":    {`[{"value":1},{"value":2}]`},
+		"mode":            {"burst"},
+		"concurrency":     {"1"},
+		"total_requests":  {"3"},
+		"burst_count":     {"10"},
+		"burst_idle_ms":   {"0"},
+		"expected_status": {"200"},
+	}
+
+	// Act
+	runID := postRuns(t, mux, form)
+	pollDone(t, mux, runID)
+
+	// Assert
+	gotBodies := []string{<-bodies, <-bodies, <-bodies}
+	if strings.Join(gotBodies, ",") != "1,2,1" {
+		t.Fatalf("dispatched request body values = %v, want [1 2 1]", gotBodies)
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	if len(configs) != 1 || len(configs[0].PayloadPool) != 2 {
+		t.Fatalf("persisted configs/payload pool = %d/%d, want 1/2", len(configs), len(configs[0].PayloadPool))
 	}
 }
 

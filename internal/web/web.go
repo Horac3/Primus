@@ -300,6 +300,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("GET /auth-fragment", authFragmentHandler(db, tmpl))
 	mux.HandleFunc("GET /sidebar-fragment", sidebarHandler(db, tmpl))
 	mux.HandleFunc("GET /requests/{id}", requestPanelHandler(db, tmpl, generator != nil))
+	mux.HandleFunc("POST /requests/{id}/payloads/generate", postGeneratePayloadsHandler(db, generator))
 	mux.HandleFunc("POST /nl/request", postNLRequestHandler(db, generator))
 	mux.HandleFunc("POST /nl/testconfig", postNLTestConfigHandler(db, generator, bounds))
 	mux.HandleFunc("POST /import", importHandler(db, tmpl, generator != nil))
@@ -477,6 +478,7 @@ type panelData struct {
 	HeadersJSON      string
 	AuthzOverride    string
 	IsNew            bool
+	HasBody          bool
 	AuthoringEnabled bool
 }
 
@@ -496,7 +498,8 @@ func panelDataFor(def model.RequestDefinition, isNew, authoringEnabled bool) pan
 	}
 	return panelData{
 		Def: def, BodyStr: body, HeadersJSON: string(headers),
-		AuthzOverride: override, IsNew: isNew, AuthoringEnabled: authoringEnabled,
+		AuthzOverride: override, IsNew: isNew, HasBody: def.Body != nil && len(def.Body.Raw) > 0,
+		AuthoringEnabled: authoringEnabled,
 	}
 }
 
@@ -604,6 +607,57 @@ func postNLTestConfigHandler(db *sql.DB, generator author.Generator, bounds auth
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		if err := json.NewEncoder(w).Encode(suggestion); err != nil {
 			log.Printf("web: encode generated test config: %v", err)
+		}
+	}
+}
+
+func postGeneratePayloadsHandler(db *sql.DB, generator author.Generator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if generator == nil {
+			http.Error(w, "payload generation is unavailable; configure PRIMUS_ANALYZER=ollama", http.StatusServiceUnavailable)
+			return
+		}
+		requestedCount, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("count")))
+		if err != nil || requestedCount < 1 {
+			http.Error(w, "count must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		count := requestedCount
+		if count > author.MaxPayloadCount {
+			count = author.MaxPayloadCount
+		}
+		definition, err := store.GetRequestDefinition(db, r.PathValue("id"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if definition.Body == nil || len(definition.Body.Raw) == 0 {
+			http.Error(w, "endpoint has no body template", http.StatusBadRequest)
+			return
+		}
+		payloads, err := generator.GeneratePayloads(r.Context(), definition.Body.Raw, count)
+		if err != nil {
+			log.Printf("web: generate payload variants for endpoint %s: %v", definition.ID, err)
+			http.Error(w, "payload generation failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		if err := author.ValidatePayloads(definition.Body.Raw, payloads, count); err != nil {
+			log.Printf("web: generated payload pool failed server validation for endpoint %s: %v", definition.ID, err)
+			http.Error(w, "payload generation rejected: "+err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		response := struct {
+			Payloads       []json.RawMessage `json:"payloads"`
+			RequestedCount int               `json:"requested_count"`
+			GeneratedCount int               `json:"generated_count"`
+			Capped         bool              `json:"capped"`
+		}{
+			Payloads: payloads, RequestedCount: requestedCount, GeneratedCount: len(payloads),
+			Capped: requestedCount > count,
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("web: encode generated payloads for endpoint %s: %v", definition.ID, err)
 		}
 	}
 }
@@ -721,6 +775,16 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 		if err != nil {
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 			return
+		}
+		if len(cfg.PayloadPool) > 0 {
+			if def.Body == nil {
+				http.Error(w, "payload_pool requires a JSON body template", http.StatusBadRequest)
+				return
+			}
+			if err := author.ValidatePayloads(def.Body.Raw, cfg.PayloadPool, len(cfg.PayloadPool)); err != nil {
+				http.Error(w, "invalid payload_pool: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		if err := engine.ValidateTestConfig(cfg); err != nil {
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
@@ -1012,6 +1076,27 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 	cfg := model.TestConfig{
 		ID:        fmt.Sprintf("cfg-%d", time.Now().UnixNano()),
 		RequestID: requestID,
+	}
+	if raw := strings.TrimSpace(r.FormValue("payload_pool")); raw != "" {
+		if len(raw) > author.MaxPayloadPoolBytes*4 {
+			return cfg, fmt.Errorf("payload_pool exceeds the form size limit")
+		}
+		if err := json.Unmarshal([]byte(raw), &cfg.PayloadPool); err != nil {
+			return cfg, fmt.Errorf("payload_pool must be a JSON array: %w", err)
+		}
+		if cfg.PayloadPool == nil && raw != "[]" {
+			return cfg, fmt.Errorf("payload_pool must be a JSON array")
+		}
+		var poolBytes int
+		for i, payload := range cfg.PayloadPool {
+			poolBytes += len(payload)
+			if poolBytes > author.MaxPayloadPoolBytes {
+				return cfg, fmt.Errorf("payload_pool exceeds the %d-byte limit", author.MaxPayloadPoolBytes)
+			}
+			if len(payload) == 0 || !json.Valid(payload) {
+				return cfg, fmt.Errorf("payload_pool item %d is not valid JSON", i+1)
+			}
+		}
 	}
 	switch r.FormValue("mode") {
 	case "burst":

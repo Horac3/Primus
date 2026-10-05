@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // AuthType identifies which authentication scheme a request uses.
 type AuthType string
@@ -104,14 +107,15 @@ type Assertions struct {
 // TestConfig is a parameterised test to execute against a RequestDefinition.
 // Duration is used only when Mode == "soak"; load/burst use TotalRequests.
 type TestConfig struct {
-	ID            string        `json:"id"`
-	RequestID     string        `json:"request_id"`
-	Mode          Mode          `json:"mode"`
-	Concurrency   int           `json:"concurrency"`
-	TotalRequests int           `json:"total_requests"`
-	Duration      time.Duration `json:"duration,omitempty"`
-	BurstPattern  *BurstPattern `json:"burst_pattern,omitempty"`
-	Assertions    Assertions    `json:"assertions"`
+	ID            string            `json:"id"`
+	RequestID     string            `json:"request_id"`
+	Mode          Mode              `json:"mode"`
+	Concurrency   int               `json:"concurrency"`
+	TotalRequests int               `json:"total_requests"`
+	Duration      time.Duration     `json:"duration,omitempty"`
+	BurstPattern  *BurstPattern     `json:"burst_pattern,omitempty"`
+	Assertions    Assertions        `json:"assertions"`
+	PayloadPool   []json.RawMessage `json:"payload_pool,omitempty"`
 }
 
 // RunSummary holds aggregate metrics for a completed run.

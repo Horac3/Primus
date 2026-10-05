@@ -14,6 +14,7 @@ const defaultGeneratorTimeout = 90 * time.Second
 type Generator interface {
 	GenerateRequest(ctx context.Context, description string, endpoints []Endpoint) (RequestSuggestion, error)
 	GenerateTestConfig(ctx context.Context, description string, endpoint Endpoint, bounds Bounds) (TestConfigSuggestion, error)
+	GeneratePayloads(ctx context.Context, template json.RawMessage, count int) ([]json.RawMessage, error)
 }
 
 type Config struct {

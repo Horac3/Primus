@@ -235,6 +235,98 @@ func TestOllamaGeneratorGenerateTestConfigTable(t *testing.T) {
 	}
 }
 
+func TestOllamaGeneratorGeneratePayloadsUsesTemplateAndValidatesShape(t *testing.T) {
+	// Arrange
+	template := json.RawMessage(`{"name":"example","profile":{"active":true},"tags":["starter"]}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Ollama request: %v", err)
+			return
+		}
+		var input struct {
+			Template json.RawMessage `json:"template"`
+			Count    int             `json:"count"`
+		}
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil {
+			t.Errorf("decode generation input: %v", err)
+			return
+		}
+		if string(input.Template) != string(template) || input.Count != 2 {
+			t.Errorf("generation input = %+v, want template and count 2", input)
+		}
+		content, err := json.Marshal(map[string]any{"payloads": []json.RawMessage{
+			json.RawMessage(`{"name":"Ada","profile":{"active":false},"tags":["alpha"]}`),
+			json.RawMessage(`{"name":"Grace","profile":{"active":true},"tags":["beta"]}`),
+		}})
+		if err != nil {
+			t.Errorf("marshal generated payloads: %v", err)
+			return
+		}
+		response, err := json.Marshal(map[string]any{"message": map[string]string{"content": string(content)}})
+		if err != nil {
+			t.Errorf("marshal Ollama response: %v", err)
+			return
+		}
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+	generator := OllamaGenerator{URL: server.URL, Model: "test-model", Client: server.Client()}
+
+	// Act
+	got, err := generator.GeneratePayloads(context.Background(), template, 2)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("GeneratePayloads: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d payloads, want 2", len(got))
+	}
+	if err := ValidatePayloads(template, got, 2); err != nil {
+		t.Fatalf("ValidatePayloads: %v", err)
+	}
+}
+
+func TestValidatePayloadsRejectsShapeChanges(t *testing.T) {
+	tests := []struct {
+		name     string
+		template json.RawMessage
+		payload  json.RawMessage
+	}{
+		{
+			name: "missing object key", template: json.RawMessage(`{"name":"example","active":true}`),
+			payload: json.RawMessage(`{"name":"generated"}`),
+		},
+		{
+			name: "wrong scalar type", template: json.RawMessage(`{"count":1}`),
+			payload: json.RawMessage(`{"count":"one"}`),
+		},
+		{
+			name: "different array length", template: json.RawMessage(`{"tags":["one"]}`),
+			payload: json.RawMessage(`{"tags":["one","two"]}`),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			payloads := []json.RawMessage{tt.payload}
+
+			// Act
+			err := ValidatePayloads(tt.template, payloads, 1)
+
+			// Assert
+			if err == nil {
+				t.Fatalf("ValidatePayloads(%s) succeeded, want shape rejection", tt.payload)
+			}
+		})
+	}
+}
+
 func TestValidateTestConfigSuggestionRejectsOutOfBoundsWithoutClamping(t *testing.T) {
 	tests := []struct {
 		name       string

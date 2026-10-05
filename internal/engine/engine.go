@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -346,12 +347,14 @@ func runWorkers(
 	ctx context.Context,
 	req model.RequestDefinition,
 	auth model.AuthConfig,
+	payloadPool []json.RawMessage,
 	jobs <-chan struct{},
 	results chan<- result,
 	concurrency int,
 	client *http.Client,
 ) {
 	var wg sync.WaitGroup
+	var nextPayload atomic.Uint64
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
@@ -360,7 +363,12 @@ func runWorkers(
 				if ctx.Err() != nil {
 					return
 				}
-				r := execRequest(ctx, client, req, auth)
+				request := req
+				if len(payloadPool) > 0 {
+					index := (nextPayload.Add(1) - 1) % uint64(len(payloadPool))
+					request.Body = &model.BodyTemplate{Raw: append([]byte(nil), payloadPool[index]...)}
+				}
+				r := execRequest(ctx, client, request, auth)
 				select {
 				case results <- r:
 				case <-ctx.Done():
@@ -622,7 +630,7 @@ func RunWithSnapshot(ctx context.Context, req model.RequestDefinition, cfg model
 
 	startedAt := time.Now()
 	go feed(runCtx, jobs, cfg, startedAt)
-	runWorkers(runCtx, req, auth, jobs, results, cfg.Concurrency, client)
+	runWorkers(runCtx, req, auth, cfg.PayloadPool, jobs, results, cfg.Concurrency, client)
 
 	summary, buckets, series := aggregate(results, cfg.Assertions, startedAt, snapshot)
 	finishedAt := time.Now()
