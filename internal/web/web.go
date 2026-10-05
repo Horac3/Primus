@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	primusdocs "github.com/Horac3/Primus/docs"
+	"github.com/Horac3/Primus/internal/author"
 	"github.com/Horac3/Primus/internal/engine"
 	"github.com/Horac3/Primus/internal/importer"
 	"github.com/Horac3/Primus/internal/insight"
@@ -271,6 +273,7 @@ func NewServerWithTemplateDir(db *sql.DB, templateDir string) *http.ServeMux {
 func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux {
 	mux := http.NewServeMux()
 	analyzer := configuredInsightAnalyzer()
+	generator := configuredAuthorGenerator()
 	if _, err := store.FailPendingInsights(db, "insight generation interrupted by server restart"); err != nil {
 		log.Printf("web: recover pending insights: %v", err)
 	}
@@ -290,8 +293,9 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /auth", authHandler(db, tmpl))
 	mux.HandleFunc("GET /auth-fragment", authFragmentHandler(db, tmpl))
 	mux.HandleFunc("GET /sidebar-fragment", sidebarHandler(db, tmpl))
-	mux.HandleFunc("GET /requests/{id}", requestPanelHandler(db, tmpl))
-	mux.HandleFunc("POST /import", importHandler(db, tmpl))
+	mux.HandleFunc("GET /requests/{id}", requestPanelHandler(db, tmpl, generator != nil))
+	mux.HandleFunc("POST /nl/request", postNLRequestHandler(db, generator))
+	mux.HandleFunc("POST /import", importHandler(db, tmpl, generator != nil))
 	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
 	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg))
 	mux.HandleFunc("POST /runs/{id}/insights", postInsightHandler(db, tmpl, analyzer))
@@ -304,6 +308,25 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("GET /docs/{slug}", docsPageHandler(tmpl))
 
 	return mux
+}
+
+func configuredAuthorGenerator() author.Generator {
+	config, err := insight.LoadConfig()
+	if err != nil {
+		log.Printf("web: load author generator config: %v", err)
+		return nil
+	}
+	generator, err := author.NewGenerator(author.Config{
+		Analyzer: config.Analyzer,
+		URL:      config.LLMURL,
+		Model:    config.LLMModel,
+		Timeout:  config.LLMTimeout,
+	})
+	if err != nil {
+		log.Printf("web: configure author generator: %v; natural-language authoring disabled", err)
+		return nil
+	}
+	return generator
 }
 
 func configuredInsightAnalyzer() insight.Analyzer {
@@ -441,29 +464,39 @@ func sidebarHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 // ---- GET /requests/{id} — main-panel fragment ------------------------------
 
 type panelData struct {
-	Def           model.RequestDefinition
-	BodyStr       string
-	AuthzOverride string
-	IsNew         bool
+	Def              model.RequestDefinition
+	BodyStr          string
+	HeadersJSON      string
+	AuthzOverride    string
+	IsNew            bool
+	AuthoringEnabled bool
 }
 
-func panelDataFor(def model.RequestDefinition, isNew bool) panelData {
+func panelDataFor(def model.RequestDefinition, isNew, authoringEnabled bool) panelData {
 	var body string
 	if def.Body != nil {
 		body = string(def.Body.Raw)
+	}
+	headers, err := json.Marshal(def.Headers)
+	if err != nil {
+		log.Printf("web: marshal endpoint %s headers for builder: %v", def.ID, err)
+		headers = []byte("{}")
 	}
 	var override string
 	if def.Headers != nil {
 		override = def.Headers["Authorization"]
 	}
-	return panelData{Def: def, BodyStr: body, AuthzOverride: override, IsNew: isNew}
+	return panelData{
+		Def: def, BodyStr: body, HeadersJSON: string(headers),
+		AuthzOverride: override, IsNew: isNew, AuthoringEnabled: authoringEnabled,
+	}
 }
 
-func requestPanelHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+func requestPanelHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "new" {
-			renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(model.RequestDefinition{Method: "GET"}, true))
+			renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(model.RequestDefinition{Method: "GET"}, true, authoringEnabled))
 			return
 		}
 		def, err := store.GetRequestDefinition(db, id)
@@ -471,13 +504,58 @@ func requestPanelHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(def, false))
+		renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(def, false, authoringEnabled))
+	}
+}
+
+func postNLRequestHandler(db *sql.DB, generator author.Generator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if generator == nil {
+			http.Error(w, "natural-language authoring is unavailable; configure PRIMUS_ANALYZER=ollama", http.StatusServiceUnavailable)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		var input struct {
+			Description string `json:"description"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(input.Description) == "" {
+			http.Error(w, "description is required", http.StatusBadRequest)
+			return
+		}
+		definitions, err := store.ListRequestDefinitions(db)
+		if err != nil {
+			http.Error(w, "list endpoints: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		endpoints := make([]author.Endpoint, 0, len(definitions))
+		for _, definition := range definitions {
+			endpoints = append(endpoints, author.Endpoint{
+				ID: definition.ID, Name: definition.Name, Method: definition.Method, URL: definition.URLTemplate,
+			})
+		}
+		sort.Slice(endpoints, func(i, j int) bool { return endpoints[i].ID < endpoints[j].ID })
+		suggestion, err := generator.GenerateRequest(r.Context(), input.Description, endpoints)
+		if err != nil {
+			log.Printf("web: generate request definition: %v", err)
+			http.Error(w, "request generation failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if err := json.NewEncoder(w).Encode(suggestion); err != nil {
+			log.Printf("web: encode generated request definition: %v", err)
+		}
 	}
 }
 
 // ---- POST /import ----------------------------------------------------------
 
-func importHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		specURL := strings.TrimSpace(r.FormValue("spec_url"))
 		specText := strings.TrimSpace(r.FormValue("spec_text"))
@@ -526,7 +604,7 @@ func importHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 		}
 		if len(defs) > 0 {
 			fmt.Fprint(w, `<div id="main-panel" hx-swap-oob="true">`)
-			if err := tmpl.ExecuteTemplate(w, "endpoint-panel.html", panelDataFor(defs[0], false)); err != nil {
+			if err := tmpl.ExecuteTemplate(w, "endpoint-panel.html", panelDataFor(defs[0], false, authoringEnabled)); err != nil {
 				log.Printf("template endpoint-panel.html: %v", err)
 				return
 			}
@@ -539,7 +617,11 @@ func importHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 
 func probeHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		def := requestDefFromForm(r)
+		def, err := requestDefFromForm(r)
+		if err != nil {
+			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		auth, err := store.GetGlobalAuth(db)
 		if err != nil {
 			http.Error(w, "load auth: "+err.Error(), http.StatusInternalServerError)
@@ -563,7 +645,11 @@ type runningData struct {
 
 func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		def := requestDefFromForm(r)
+		def, err := requestDefFromForm(r)
+		if err != nil {
+			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if def.ID == "" {
 			def.ID = fmt.Sprintf("ad-hoc-%d", time.Now().UnixNano())
 		}
@@ -823,9 +909,10 @@ func docsPageHandler(tmpl *template.Template) http.HandlerFunc {
 // Authentication stays global; the form may carry one per-endpoint
 // Authorization override (authz_override) — empty or the [GLOBAL]
 // sentinel means "no override, use global auth".
-func requestDefFromForm(r *http.Request) model.RequestDefinition {
+func requestDefFromForm(r *http.Request) (model.RequestDefinition, error) {
 	def := model.RequestDefinition{
 		ID:          strings.TrimSpace(r.FormValue("request_id")),
+		Name:        strings.TrimSpace(r.FormValue("request_name")),
 		Method:      strings.ToUpper(strings.TrimSpace(r.FormValue("method"))),
 		URLTemplate: strings.TrimSpace(r.FormValue("url")),
 	}
@@ -840,6 +927,21 @@ func requestDefFromForm(r *http.Request) model.RequestDefinition {
 			def.Headers = map[string]string{"Content-Type": "application/json"}
 		}
 	}
+	if rawHeaders := strings.TrimSpace(r.FormValue("headers_json")); rawHeaders != "" {
+		var headers map[string]string
+		if err := json.Unmarshal([]byte(rawHeaders), &headers); err != nil {
+			return model.RequestDefinition{}, fmt.Errorf("headers_json must be a JSON object with string values: %w", err)
+		}
+		for name, value := range headers {
+			if http.CanonicalHeaderKey(name) == "" || strings.ContainsAny(value, "\r\n") {
+				return model.RequestDefinition{}, fmt.Errorf("header %q is invalid", name)
+			}
+			if def.Headers == nil {
+				def.Headers = make(map[string]string)
+			}
+			def.Headers[name] = value
+		}
+	}
 	// Per-endpoint Authorization override (sentinel or empty = global applies).
 	if ov := strings.TrimSpace(r.FormValue("authz_override")); ov != "" && ov != model.HeaderGlobalSentinel {
 		if def.Headers == nil {
@@ -847,7 +949,7 @@ func requestDefFromForm(r *http.Request) model.RequestDefinition {
 		}
 		def.Headers["Authorization"] = ov
 	}
-	return def
+	return def, nil
 }
 
 // parseTestConfig builds a TestConfig from form values.

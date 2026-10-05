@@ -5,8 +5,22 @@
   {{else}}<span class="method">{{.Def.Method}}</span> {{.Def.URLTemplate}}{{end}}
 </p>
 
+{{if .AuthoringEnabled}}
+<section class="card">
+  <h2 style="margin-top:0">Describe a request</h2>
+  <label>
+    <span>What should this endpoint do?</span>
+    <textarea id="nl-request-description" rows="2" placeholder="Test the login endpoint with a wrong password"></textarea>
+  </label>
+  <button type="button" class="secondary" style="margin-top:.5rem" onclick="generateRequestDefinition()">Generate from description</button>
+  <p id="nl-request-status" class="muted" role="status" style="margin-top:.35rem"></p>
+  <p id="nl-request-confidence" class="muted" style="margin-top:.25rem"></p>
+</section>
+{{end}}
+
 <form id="panel-form" hx-post="/runs" hx-target="#results" hx-swap="innerHTML" hx-indicator="#run-spinner">
-  {{if not .IsNew}}<input type="hidden" name="request_id" value="{{.Def.ID}}">{{end}}
+  <input type="hidden" name="request_id" value="{{.Def.ID}}">
+  <input type="hidden" name="request_name" value="{{.Def.Name}}">
   <h2>Request</h2>
   <div class="row" style="margin-bottom:.5rem">
     <label style="flex:0 0 100px">
@@ -28,6 +42,10 @@
   <details>
     <summary>JSON body (optional)</summary>
     <textarea name="body" rows="5" placeholder='{"key":"value"}'>{{.BodyStr}}</textarea>
+  </details>
+  <details>
+    <summary>Request headers (JSON)</summary>
+    <textarea name="headers_json" rows="3" placeholder='{"Content-Type":"application/json"}'>{{.HeadersJSON}}</textarea>
   </details>
 
   <details open>

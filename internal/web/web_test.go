@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Horac3/Primus/internal/author"
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
 	"github.com/Horac3/Primus/internal/web"
@@ -620,6 +622,7 @@ func TestGetFailedInsightHasFinalFragmentAndMetadata(t *testing.T) {
 	if err := store.SaveRun(db, model.Run{ID: "run-failed-insight", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
 		t.Fatalf("SaveRun: %v", err)
 	}
+
 	if _, _, err := store.StartInsight(db, "run-failed-insight", "ollama", "qwen2.5:3b"); err != nil {
 		t.Fatalf("StartInsight: %v", err)
 	}
@@ -1349,3 +1352,152 @@ func TestNav_DocsLinkVisibleFromShell(t *testing.T) {
 
 // keep JSON import for compile check
 var _ = json.Marshal
+
+func TestPostNLRequestMatchesOnlyProvidedEndpointOrExplicitNew(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Ollama request: %v", err)
+			return
+		}
+		var input author.RequestPrompt
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil {
+			t.Errorf("decode prompt: %v", err)
+			return
+		}
+		if len(input.Endpoints) != 2 || input.Endpoints[1] != (author.Endpoint{
+			ID: "ep-login", Name: "User login", Method: "POST", URL: "https://api.example.com/login",
+		}) {
+			t.Errorf("endpoint context = %+v, want endpoint metadata only", input.Endpoints)
+		}
+		var content string
+		if strings.Contains(strings.ToLower(input.Description), "login") {
+			content = `{"matched_existing_id":"ep-login","method":"GET","url":"https://invented.example/path","headers":{"Content-Type":"application/json"},"body":"{\"password\":\"wrong\"}","confidence_note":"Matched User login."}`
+		} else {
+			content = `{"matched_existing_id":null,"method":"POST","url":"https://api.example.com/invoices","headers":{},"body":"{}","confidence_note":"No invoice endpoint matches; this is a new target."}`
+		}
+		response, err := json.Marshal(map[string]any{"message": map[string]string{"content": content}})
+		if err != nil {
+			t.Errorf("marshal Ollama response: %v", err)
+			return
+		}
+		_, _ = w.Write(response)
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+
+	db := newTestDB(t)
+	for _, def := range []model.RequestDefinition{
+		{ID: "ep-login", Name: "User login", Method: "POST", URLTemplate: "https://api.example.com/login", Body: &model.BodyTemplate{Raw: []byte(`{"username":"x"}`)}},
+		{ID: "ep-health", Name: "Health", Method: "GET", URLTemplate: "https://api.example.com/health", Headers: map[string]string{"X-private": "must-not-be-sent"}},
+	} {
+		if err := store.SaveRequestDefinition(db, def); err != nil {
+			t.Fatalf("SaveRequestDefinition: %v", err)
+		}
+	}
+	mux := web.NewServer(db)
+	tests := []struct {
+		name           string
+		description    string
+		wantID         string
+		wantMethod     string
+		wantURL        string
+		wantConfidence string
+	}{
+		{
+			name: "clearly matches endpoint", description: "Test the login endpoint with a wrong password",
+			wantID: "ep-login", wantMethod: "POST", wantURL: "https://api.example.com/login",
+			wantConfidence: "Matched User login.",
+		},
+		{
+			name: "falls through to new endpoint", description: "Create a new invoice endpoint",
+			wantMethod: "POST", wantURL: "https://api.example.com/invoices",
+			wantConfidence: "No invoice endpoint matches; this is a new target.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			payload, err := json.Marshal(map[string]string{"description": tt.description})
+			if err != nil {
+				t.Fatalf("marshal input: %v", err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/nl/request", bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// Act
+			mux.ServeHTTP(response, request)
+
+			// Assert
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var got author.RequestSuggestion
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode suggestion: %v", err)
+			}
+			if got.Method != tt.wantMethod || got.URL != tt.wantURL || got.ConfidenceNote != tt.wantConfidence {
+				t.Errorf("suggestion = %+v, want method %s URL %s note %q", got, tt.wantMethod, tt.wantURL, tt.wantConfidence)
+			}
+			if tt.wantID == "" {
+				if got.MatchedExistingID != nil {
+					t.Errorf("MatchedExistingID = %q, want null", *got.MatchedExistingID)
+				}
+			} else if got.MatchedExistingID == nil || *got.MatchedExistingID != tt.wantID {
+				t.Errorf("MatchedExistingID = %v, want %q", got.MatchedExistingID, tt.wantID)
+			}
+			if got.MatchedExistingID != nil && got.URL != "https://api.example.com/login" &&
+				got.URL != "https://api.example.com/health" {
+				t.Errorf("matched URL %q was not in endpoint list", got.URL)
+			}
+		})
+	}
+	definitions, err := store.ListRequestDefinitions(db)
+	if err != nil {
+		t.Fatalf("ListRequestDefinitions: %v", err)
+	}
+	if len(definitions) != 2 {
+		t.Errorf("generation persisted endpoint definitions: got %d, want the original 2", len(definitions))
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(configs) != 0 || len(runs) != 0 {
+		t.Errorf("generation persisted configs/runs: %d/%d, want none", len(configs), len(runs))
+	}
+}
+
+func TestRequestPanelHidesNaturalLanguageControlsWithoutOllama(t *testing.T) {
+	// Arrange
+	t.Setenv("PRIMUS_ANALYZER", "rules")
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	request := httptest.NewRequest(http.MethodGet, "/requests/new", nil)
+	response := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(response, request)
+
+	// Assert
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "Generate from description") ||
+		strings.Contains(response.Body.String(), "Generate test config") {
+		t.Errorf("NL authoring controls should be hidden when Ollama is not selected: %s", response.Body.String())
+	}
+}

@@ -96,6 +96,42 @@ function toggleMode() {
   document.querySelectorAll('#fields-duration input').forEach(i => i.disabled = count);
   document.querySelectorAll('#fields-count input').forEach(i => i.disabled = !count);
 }
+
+async function generateRequestDefinition() {
+  const description = document.getElementById('nl-request-description').value.trim();
+  const status = document.getElementById('nl-request-status');
+  const confidence = document.getElementById('nl-request-confidence');
+  const form = document.getElementById('panel-form');
+  if (!description) {
+    status.textContent = 'Describe the request first.';
+    return;
+  }
+  status.textContent = 'Generating…';
+  confidence.textContent = '';
+  try {
+    const response = await fetch('/nl/request', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({description})
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const suggestion = await response.json();
+    const field = name => form.elements.namedItem(name);
+    const previousID = field('request_id').value;
+    field('request_id').value = suggestion.matched_existing_id || '';
+    field('request_name').value = suggestion.matched_existing_id === previousID
+      ? field('request_name').value : '';
+    field('method').value = suggestion.method;
+    field('url').value = suggestion.url;
+    field('body').value = suggestion.body;
+    field('headers_json').value = JSON.stringify(suggestion.headers, null, 2);
+    field('authz_override').value = suggestion.headers.Authorization || '';
+    confidence.textContent = suggestion.confidence_note;
+    status.textContent = 'Fields filled for review. Nothing has been saved or tested.';
+  } catch (error) {
+    status.textContent = error.message || 'Request generation failed.';
+  }
+}
 </script>
 </body>
 </html>

@@ -76,4 +76,4 @@ For NVIDIA GPU access, install and configure the [NVIDIA Container Toolkit](http
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up --build -d
 ```
 
-The Ollama service keeps downloaded models in the `ollama-models` volume. The current Primus analyzer supports `rules` only; `PRIMUS_ANALYZER=ollama` currently falls back to rules and does not send requests to Ollama.
+The Ollama service keeps downloaded models in the `ollama-models` volume. Primus uses rules-based insights by default. With `PRIMUS_ANALYZER=ollama` and the `ai` profile active, it also enables Ollama-backed insights and natural-language request authoring in the endpoint builder. Generated request details only pre-fill the form; they are not saved or tested until you explicitly submit the form.
