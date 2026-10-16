@@ -45,6 +45,7 @@
     </tbody>
   </table>
   {{end}}
+  {{template "login-summary" .Run}}
   {{template "timeseries" .}}
   {{template "histogram" .}}
   {{template "insight-fragment" .InsightView}}

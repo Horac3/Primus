@@ -1,6 +1,7 @@
 package insight
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -171,6 +172,66 @@ func TestEvaluate(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("finding codes = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSummary_LoginCountsOnly(t *testing.T) {
+	// Arrange
+	run := model.Run{
+		Summary: model.RunSummary{TotalRequests: 10, StatusCounts: map[int]int{200: 10}},
+		Login: &model.LoginSummary{
+			PoolID: "pool-secret-id", PoolName: "secret pool name",
+			Attempted: 5, Succeeded: 3, Failed: 2,
+			FailureReasons: []model.ErrorDetail{{Cause: "HTTP 401", Count: 2}},
+			Outcomes:       []model.LoginOutcome{{Index: 4, ErrorClass: "HTTP 401"}},
+		},
+	}
+
+	// Act
+	summary := BuildSummary(run)
+	payload, _ := json.Marshal(summary)
+
+	// Assert
+	if summary.Logins == nil || summary.Logins.Attempted != 5 || summary.Logins.Succeeded != 3 || summary.Logins.Failed != 2 {
+		t.Fatalf("Logins = %+v, want 5 attempted, 3 succeeded, 2 failed", summary.Logins)
+	}
+	for _, leak := range []string{"pool-secret-id", "secret pool name", "outcomes", "HTTP 401"} {
+		if strings.Contains(string(payload), leak) {
+			t.Errorf("analyzer summary contains %q; only login counts may reach it: %s", leak, payload)
+		}
+	}
+}
+
+func TestEvaluate_LoginFailuresFinding(t *testing.T) {
+	cases := []struct {
+		name         string
+		logins       *LoginCounts
+		wantSeverity string
+	}{
+		{"no pool", nil, ""},
+		{"all logins ok", &LoginCounts{Attempted: 3, Succeeded: 3}, ""},
+		{"some failed", &LoginCounts{Attempted: 3, Succeeded: 2, Failed: 1}, SeverityWarning},
+		{"none succeeded", &LoginCounts{Attempted: 3, Failed: 3}, SeverityCritical},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Arrange
+			summary := Summary{AssertionsConfigured: true, Logins: tc.logins}
+
+			// Act
+			findings := Evaluate(summary)
+
+			// Assert
+			got := ""
+			for _, f := range findings {
+				if f.Code == "LOGIN_FAILURES" {
+					got = f.Severity
+				}
+			}
+			if got != tc.wantSeverity {
+				t.Errorf("LOGIN_FAILURES severity = %q, want %q", got, tc.wantSeverity)
 			}
 		})
 	}

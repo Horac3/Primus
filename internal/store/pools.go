@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/Horac3/Primus/internal/credential"
@@ -146,4 +147,32 @@ func ListCredentialPools(db *sql.DB) ([]PoolSummary, error) {
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// SetActiveCredentialPool selects the pool runs use instead of global auth.
+// An empty id clears it, so runs fall back to global auth.
+func SetActiveCredentialPool(db *sql.DB, id string) error {
+	var err error
+	if id == "" {
+		_, err = db.Exec(`DELETE FROM active_credential_pool WHERE id = 1`)
+	} else {
+		_, err = db.Exec(`INSERT OR REPLACE INTO active_credential_pool (id, pool_id) VALUES (1, ?)`, id)
+	}
+	if err != nil {
+		return fmt.Errorf("SetActiveCredentialPool: %w", err)
+	}
+	return nil
+}
+
+// GetActiveCredentialPool returns the active pool id, or "" for global auth.
+func GetActiveCredentialPool(db *sql.DB) (string, error) {
+	var id string
+	err := db.QueryRow(`SELECT pool_id FROM active_credential_pool WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("GetActiveCredentialPool: %w", err)
+	}
+	return id, nil
 }

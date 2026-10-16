@@ -46,9 +46,18 @@ type Summary struct {
 	Mode                 model.Mode      `json:"mode"`
 	AssertionsConfigured bool            `json:"assertions_configured"`
 	Concurrency          int             `json:"concurrency"`
+	Logins               *LoginCounts    `json:"logins,omitempty"`
 
 	runDuration time.Duration
 	timeSeries  []model.Point
+}
+
+// LoginCounts is all of a credential-pool login phase that may reach an
+// analyzer: counts only, never pool names, credentials, tokens or reasons.
+type LoginCounts struct {
+	Attempted int `json:"attempted"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
 }
 
 type Finding struct {
@@ -80,12 +89,33 @@ func BuildSummary(run model.Run) Summary {
 	summary.FailureCauses = normalizeFailureCauses(run.Summary.ErrorDetails)
 	summary.LatencyBuckets = describeLatencyBuckets(run.LatencyBuckets)
 	summary.AverageLatencyMs = averageLatency(run.TimeSeries)
+	if run.Login != nil {
+		summary.Logins = &LoginCounts{
+			Attempted: run.Login.Attempted,
+			Succeeded: run.Login.Succeeded,
+			Failed:    run.Login.Failed,
+		}
+	}
 	return summary
 }
 
 // Evaluate emits stable diagnostic codes in rule order.
 func Evaluate(summary Summary) []Finding {
 	findings := make([]Finding, 0, 5)
+	if summary.Logins != nil && summary.Logins.Failed > 0 {
+		severity, message := SeverityWarning, "Some credential-pool logins failed; those workers were excluded from the run."
+		if summary.Logins.Succeeded == 0 {
+			severity, message = SeverityCritical, "No credential-pool login succeeded, so no requests were sent."
+		}
+		findings = append(findings, Finding{
+			Code: "LOGIN_FAILURES", Severity: severity, Message: message,
+			Values: map[string]any{
+				"logins_attempted": summary.Logins.Attempted,
+				"logins_succeeded": summary.Logins.Succeeded,
+				"logins_failed":    summary.Logins.Failed,
+			},
+		})
+	}
 	if allFailuresAreTimeouts(summary) {
 		findings = append(findings, Finding{
 			Code: "CLIENT_TIMEOUT", Severity: SeverityCritical,

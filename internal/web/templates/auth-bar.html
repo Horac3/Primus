@@ -25,3 +25,19 @@
   </label>
   <button type="submit" class="secondary">Save</button>
 </form>
+<form hx-post="/pools/active" hx-target="#auth-bar" hx-swap="innerHTML" style="margin-top:.4rem">
+  <strong>👥 Runs log in as:</strong>
+  {{if .ActivePool}}
+  <span data-testid="auth-mode">Credential pool: {{.ActivePool.Name}} ({{.ActivePool.Count}} accounts)</span>
+  <span class="muted">— overrides global auth; one account per worker</span>
+  {{else}}
+  <span data-testid="auth-mode">Global auth</span>
+  {{end}}
+  &nbsp;
+  <select name="pool_id" style="width:auto">
+    <option value="">Global auth</option>
+    {{range .Pools}}<option value="{{.ID}}" {{if and $.ActivePool (eq $.ActivePool.ID .ID)}}selected{{end}}>{{.Name}} ({{.Count}})</option>{{end}}
+  </select>
+  <button type="submit" class="secondary">Use</button>
+  <button type="button" class="secondary" hx-get="/pools-fragment" hx-target="#pool-panel" hx-swap="innerHTML">Manage credential pools</button>
+</form>

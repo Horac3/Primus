@@ -177,3 +177,23 @@ func TestGetCredentialPool_UnknownIDIsAnError(t *testing.T) {
 		t.Error("want an error for an unknown pool id")
 	}
 }
+
+func TestActiveCredentialPool_SetGetClear(t *testing.T) {
+	// Arrange
+	db := migratedDB(t)
+	before, err := store.GetActiveCredentialPool(db)
+	if err != nil || before != "" {
+		t.Fatalf("initial active pool = %q, err %v; want empty (global auth)", before, err)
+	}
+
+	// Act
+	setErr := store.SetActiveCredentialPool(db, "pool-1")
+	afterSet, _ := store.GetActiveCredentialPool(db)
+	clearErr := store.SetActiveCredentialPool(db, "")
+	afterClear, _ := store.GetActiveCredentialPool(db)
+
+	// Assert
+	if setErr != nil || clearErr != nil || afterSet != "pool-1" || afterClear != "" {
+		t.Errorf("set=%q (err %v), cleared=%q (err %v); want pool-1 then empty", afterSet, setErr, afterClear, clearErr)
+	}
+}

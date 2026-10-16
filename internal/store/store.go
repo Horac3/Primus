@@ -75,6 +75,10 @@ func Migrate(db *sql.DB) error {
 			fields  TEXT NOT NULL,
 			PRIMARY KEY (pool_id, idx)
 		)`,
+		`CREATE TABLE IF NOT EXISTS active_credential_pool (
+			id      INTEGER PRIMARY KEY CHECK (id = 1),
+			pool_id TEXT NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {

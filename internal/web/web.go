@@ -58,6 +58,8 @@ var templateFuncs = template.FuncMap{
 			return "◎ Completed — no assertions configured"
 		case model.OutcomeFailNoRequests:
 			return "✗ FAILED — no successful requests"
+		case model.OutcomeFailNoLogins:
+			return "✗ FAILED — no successful logins"
 		default:
 			return "✗ FAILED"
 		}
@@ -120,6 +122,7 @@ var templateFuncs = template.FuncMap{
 		return seriesAxis(points, func(p model.Point) float64 { return p.RPS })
 	},
 	"elapsedTicks": elapsedTicks,
+	"inc":          func(i int) int { return i + 1 },
 }
 
 // bucketLabel names bucket i of the fixed latency edges ("0–49", …, "≥600").
@@ -299,6 +302,11 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /auth", authHandler(db, tmpl))
 	mux.HandleFunc("GET /auth-fragment", authFragmentHandler(db, tmpl))
 	mux.HandleFunc("GET /sidebar-fragment", sidebarHandler(db, tmpl))
+	mux.HandleFunc("GET /pools-fragment", poolsFragmentHandler(db, tmpl))
+	mux.HandleFunc("POST /pools/import", poolImportHandler(db, tmpl))
+	mux.HandleFunc("POST /pools/active", poolActiveHandler(db, tmpl))
+	mux.HandleFunc("POST /pools/{id}/spec", poolSpecHandler(db, tmpl))
+	mux.HandleFunc("POST /pools/{id}/test-login", poolTestLoginHandler(db, tmpl))
 	mux.HandleFunc("GET /requests/{id}", requestPanelHandler(db, tmpl, generator != nil))
 	mux.HandleFunc("POST /requests/{id}/payloads/generate", postGeneratePayloadsHandler(db, generator))
 	mux.HandleFunc("POST /nl/request", postNLRequestHandler(db, generator))
@@ -362,7 +370,9 @@ func indexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 // ---- auth bar --------------------------------------------------------------
 
 type authBarData struct {
-	Auth model.AuthConfig
+	Auth       model.AuthConfig
+	Pools      []store.PoolSummary
+	ActivePool *store.PoolSummary // non-nil: this pool overrides global auth for runs
 }
 
 // authFromForm builds a global AuthConfig from the auth-bar form fields.
@@ -396,18 +406,23 @@ func authHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			http.Error(w, "save auth: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		renderTemplate(w, tmpl, "auth-bar.html", authBarData{Auth: auth})
+		data, err := loadAuthBar(db)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		renderTemplate(w, tmpl, "auth-bar.html", data)
 	}
 }
 
 func authFragmentHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		auth, err := store.GetGlobalAuth(db)
+		data, err := loadAuthBar(db)
 		if err != nil {
-			http.Error(w, "load auth: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		renderTemplate(w, tmpl, "auth-bar.html", authBarData{Auth: auth})
+		renderTemplate(w, tmpl, "auth-bar.html", data)
 	}
 }
 
@@ -790,6 +805,21 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// An active credential pool overrides global auth for the run.
+		pool, err := activeRunPool(db)
+		if err != nil {
+			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		detail := fmt.Sprintf("%s · concurrency %d", cfg.Mode, cfg.Concurrency)
+		if pool != nil {
+			cfg.CredentialPoolID = pool.ID
+			if err := engine.ValidatePool(cfg, *pool); err != nil {
+				http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			detail += " · logging in as pool " + pool.Name
+		}
 		if err := store.SaveTestConfig(db, cfg); err != nil {
 			http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -805,7 +835,7 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 		runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
 		h := &runHandle{done: make(chan struct{})}
 		reg.startWithHandle(r.Context(), runID, h, func(ctx context.Context, h *runHandle) (model.Run, error) {
-			run, err := engine.RunWithSnapshot(ctx, def, cfg, auth, &h.snapshot)
+			run, err := engine.RunWithPool(ctx, def, cfg, auth, pool, &h.snapshot)
 			if err != nil {
 				return model.Run{}, err
 			}
@@ -814,10 +844,7 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 		})
 
 		w.WriteHeader(http.StatusAccepted)
-		renderTemplate(w, tmpl, "running.html", runningData{
-			RunID:  runID,
-			Detail: fmt.Sprintf("%s · concurrency %d", cfg.Mode, cfg.Concurrency),
-		})
+		renderTemplate(w, tmpl, "running.html", runningData{RunID: runID, Detail: detail})
 	}
 }
 
