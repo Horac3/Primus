@@ -203,3 +203,9 @@ func (f *authFixture) snapshotHeaders() map[string]int {
 	}
 	return out
 }
+
+func (f *authFixture) maxConcurrentPerToken() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxPerToken
+}
