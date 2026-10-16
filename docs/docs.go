@@ -20,7 +20,7 @@ import (
 var files embed.FS
 
 // order is the sidebar order for the viewer index.
-var order = []string{"load", "burst", "soak", "auth-probe", "global-auth", "assertions", "cli"}
+var order = []string{"load", "burst", "soak", "auth-probe", "global-auth", "credential-pools", "assertions", "cli"}
 
 // Doc is one reference page: its URL slug and display title.
 type Doc struct {
