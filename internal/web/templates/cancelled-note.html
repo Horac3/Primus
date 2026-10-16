@@ -1,0 +1,8 @@
+{{define "cancelled-note"}}
+{{with .Summary.Cancelled}}
+<p class="muted" data-testid="cancelled-note" style="margin-top:.5rem">
+  {{.}} in-flight request{{if ne . 1}}s{{end}} {{if $.Stopped}}abandoned on stop{{else}}cut off at the end of the run{{end}}
+  — not counted as errors, latency or status codes.
+</p>
+{{end}}
+{{end}}

@@ -21,6 +21,9 @@ type result struct {
 	statusCode int
 	latency    time.Duration
 	err        error
+	// cancelled: the request failed because the run's own context ended
+	// (Stop or the Duration deadline). Neither a success nor an error.
+	cancelled bool
 }
 
 // tuned http.Client scaled to the given concurrency level.
@@ -364,7 +367,8 @@ type workerAuth struct {
 }
 
 // runWorkers launches one worker per entry in workers, each pulling from
-// jobs and sending results to results. Closes results when all finish.
+// jobs and sending exactly one result per request it fires. Closes results
+// when all finish.
 func runWorkers(
 	ctx context.Context,
 	req model.RequestDefinition,
@@ -390,11 +394,13 @@ func runWorkers(
 					request.Body = &model.BodyTemplate{Raw: append([]byte(nil), payloadPool[index]...)}
 				}
 				r := execRequest(ctx, client, request, w.auth)
-				select {
-				case results <- r:
-				case <-ctx.Done():
-					return
-				}
+				// Judge by the run context, not the error type: a request's
+				// own timeout also surfaces as a context error, and that one
+				// is the target's fault.
+				r.cancelled = r.err != nil && ctx.Err() != nil
+				// Always deliver: aggregate drains results until close, so
+				// every dispatched request is counted exactly once.
+				results <- r
 				if r.statusCode == http.StatusUnauthorized && w.relogin != nil {
 					relogin := w.relogin
 					w.relogin = nil // re-login once per worker
@@ -514,6 +520,7 @@ func aggregate(results <-chan result, assertions model.Assertions, start time.Ti
 	errorCauses := make(map[string]int)
 	var latencies []int
 	var errorCount int
+	cancelled := 0
 	total := 0
 	windowRequests := 0
 	windowSuccesses := 0
@@ -535,6 +542,10 @@ func aggregate(results <-chan result, assertions model.Assertions, start time.Ti
 					emitSeriesPoint(start, windowRequests, windowSuccesses, windowLatencyTotalMs, windowErrors, &series, snapshot)
 				}
 				goto finalize
+			}
+			if r.cancelled {
+				cancelled++
+				continue
 			}
 			total++
 			windowRequests++
@@ -606,6 +617,7 @@ finalize:
 		P99Millis:     p99,
 		ErrorRate:     errorRate,
 		TotalRequests: total,
+		Cancelled:     cancelled,
 	}, Bucketize(latencies), series
 }
 

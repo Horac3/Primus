@@ -5,7 +5,7 @@
   <table>
     <tr><th>Attempted</th><td>{{.Attempted}}</td>
         <th>Succeeded</th><td>{{.Succeeded}} / {{.Attempted}} succeeded</td>
-        <th>Failed</th><td>{{.Failed}}</td></tr>
+        <th>Failed</th><td>{{.Failed}}{{with .Cancelled}} <span class="muted">· {{.}} interrupted by stop</span>{{end}}</td></tr>
     <tr><th>Login p50</th><td>{{.P50Millis}} ms</td>
         <th>Login p95</th><td>{{.P95Millis}} ms</td>
         <th>Re-logins on 401</th><td>{{.ReloginsSucceeded}} / {{.Relogins}}</td></tr>

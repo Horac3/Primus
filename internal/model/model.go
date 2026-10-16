@@ -206,6 +206,7 @@ type LoginSummary struct {
 	Attempted         int            `json:"attempted"`
 	Succeeded         int            `json:"succeeded"`
 	Failed            int            `json:"failed"`
+	Cancelled         int            `json:"cancelled,omitempty"` // interrupted by Stop; not in Failed
 	P50Millis         int            `json:"p50_millis"`
 	P95Millis         int            `json:"p95_millis"`
 	FailureReasons    []ErrorDetail  `json:"failure_reasons,omitempty"`
@@ -231,6 +232,10 @@ type RunSummary struct {
 	// TotalRequests is the actual number of fired requests (completed
 	// responses + transport errors). Basis for requests/sec.
 	TotalRequests int `json:"total_requests"`
+	// Cancelled counts requests abandoned in flight because the run's own
+	// context ended (Stop, or the Duration deadline). They are in no other
+	// field: not TotalRequests, errors, latencies or status counts.
+	Cancelled int `json:"cancelled"`
 }
 
 // RunOutcome is the tri-state result of a Run.

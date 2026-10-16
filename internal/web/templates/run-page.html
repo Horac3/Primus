@@ -35,6 +35,7 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
   <span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span>
   {{if .Stopped}}&nbsp;<span class="muted">⏹ Stopped early</span>{{end}}
 </p>
+{{template "cancelled-note" .}}
 
 <section>
 <h2>Latency</h2>

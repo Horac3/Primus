@@ -21,6 +21,9 @@ const (
 	// loginTimeout bounds one login request so a hung login endpoint can't
 	// stall the run forever.
 	loginTimeout = 30 * time.Second
+	// loginCanceled marks a login interrupted by Stop. Such logins are
+	// counted as Cancelled in the summary, never as Failed.
+	loginCanceled = "canceled"
 	// maxLoginBody caps how much of a login response is read for extraction.
 	maxLoginBody = 1 << 20
 	// maxLoginFailureReasons is how many distinct failure reasons a run keeps.
@@ -145,20 +148,20 @@ func (p *poolLogins) loginWorkers(ctx context.Context, concurrency int) []worker
 	var wg sync.WaitGroup
 	for i := 0; i < distinct; i++ {
 		if ctx.Err() != nil {
-			outcomes[i] = model.LoginOutcome{Index: i, ErrorClass: "canceled"}
+			outcomes[i] = model.LoginOutcome{Index: i, ErrorClass: loginCanceled}
 			continue
 		}
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
-			outcomes[i] = model.LoginOutcome{Index: i, ErrorClass: "canceled"}
+			outcomes[i] = model.LoginOutcome{Index: i, ErrorClass: loginCanceled}
 			continue
 		}
 		// select picks randomly when both cases are ready; never start a
 		// login once the run is cancelled.
 		if ctx.Err() != nil {
 			<-sem
-			outcomes[i] = model.LoginOutcome{Index: i, ErrorClass: "canceled"}
+			outcomes[i] = model.LoginOutcome{Index: i, ErrorClass: loginCanceled}
 			continue
 		}
 		wg.Add(1)
@@ -308,8 +311,11 @@ func (p *poolLogins) login(ctx context.Context, idx int) (model.LoginOutcome, st
 // classifyLoginError reduces a transport error to a short reason. Raw
 // errors are not reported: they can embed the rendered login URL.
 func classifyLoginError(ctx context.Context, err error) string {
-	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
-		return "canceled"
+	// Judged by the context alone: ctx derives from the run, so it reports
+	// Canceled only when the run was stopped (loginTimeout reports
+	// DeadlineExceeded, a real timeout).
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return loginCanceled
 	}
 	var netErr net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
@@ -332,9 +338,12 @@ func (p *poolLogins) summary() *model.LoginSummary {
 	reasons := make(map[string]int)
 	var latencies []int
 	for _, o := range p.outcomes {
-		if o.Success {
+		switch {
+		case o.Success:
 			s.Succeeded++
-		} else {
+		case o.ErrorClass == loginCanceled:
+			s.Cancelled++
+		default:
 			s.Failed++
 			reasons[o.ErrorClass]++
 		}

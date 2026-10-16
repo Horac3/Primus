@@ -16,6 +16,7 @@
         <th>Error rate</th><td>{{printf "%.1f%%" (mul .Summary.ErrorRate 100.0)}}</td>
         <th></th><td></td></tr>
   </table>
+  {{template "cancelled-note" .}}
   {{if .Summary.StatusCounts}}
   <table style="margin-top:.5rem">
     <thead><tr><th>Status</th><th>Count</th></tr></thead>

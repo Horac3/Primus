@@ -326,8 +326,72 @@ func TestRunWithPool_CancelMidLoginSkipsUnstartedLogins(t *testing.T) {
 	if hits := f.loginHits.Load(); hits != 1 {
 		t.Errorf("login requests sent = %d, want 1 (no login starts after cancel)", hits)
 	}
-	if run.Login.Attempted != 4 || run.Login.Failed != 4 || !hasReason(run.Login, "canceled") {
-		t.Errorf("login = %+v, want all 4 reported as canceled", run.Login)
+	if run.Login.Attempted != 4 || run.Login.Cancelled != 4 || run.Login.Failed != 0 {
+		t.Errorf("login = %+v, want all 4 cancelled and none failed", run.Login)
+	}
+}
+
+func TestRunWithPool_CancelMidLogin_RealFailureBeforeStopStaysFailed(t *testing.T) {
+	// Arrange: one login at a time; the first is a wrong password, the
+	// second hangs until Stop.
+	f := newAuthFixture(t, 4)
+	f.loginBlockFrom = 2
+	pool := f.pool(4, 0)
+	pool.LoginConcurrency = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan model.Run, 1)
+	go func() {
+		run, _ := engine.RunWithPool(ctx, f.meRequest(), countCfg(4, 100), model.AuthConfig{}, &pool, nil)
+		done <- run
+	}()
+	waitFor(t, func() bool { return f.loginHits.Load() == 2 })
+
+	// Act
+	cancel()
+	run := <-done
+
+	// Assert
+	l := run.Login
+	if l.Attempted != 4 || l.Succeeded != 0 || l.Failed != 1 || l.Cancelled != 3 {
+		t.Errorf("login = %+v, want 1 failed (wrong password) and 3 cancelled", l)
+	}
+	if !hasReason(l, "HTTP 401") || hasReason(l, "canceled") {
+		t.Errorf("failure reasons = %+v, want only the 401, not the interrupted logins", l.FailureReasons)
+	}
+}
+
+func TestRunWithPool_StopDuringRelogin_CountsThe401OnceAndNoRelogin(t *testing.T) {
+	// Arrange: the first token is rejected, and the re-login it triggers hangs.
+	f := newAuthFixture(t, 1)
+	f.firstTokenExpired = true
+	f.loginBlockFrom = 2
+	pool := f.pool(1)
+	pool.ReloginOn401 = true
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan model.Run, 1)
+	go func() {
+		run, _ := engine.RunWithPool(ctx, f.meRequest(), countCfg(1, 100), model.AuthConfig{}, &pool, nil)
+		done <- run
+	}()
+	waitFor(t, func() bool { return f.loginHits.Load() == 2 })
+
+	// Act
+	cancel()
+	var run model.Run
+	select {
+	case run = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunWithPool did not return within 3s of Stop during re-login")
+	}
+
+	// Assert
+	s := run.Summary
+	if s.TotalRequests != 1 || s.StatusCounts[401] != 1 || s.Cancelled != 0 {
+		t.Errorf("summary = %+v, want the single 401 counted once and nothing cancelled", s)
+	}
+	if run.Login.Relogins != 0 || run.Login.ReloginsSucceeded != 0 {
+		t.Errorf("relogins = %d/%d, want 0/0: an interrupted re-login is not counted",
+			run.Login.ReloginsSucceeded, run.Login.Relogins)
 	}
 }
 
@@ -385,8 +449,8 @@ func TestRunWithPool_CancelDuringLoginStopsCleanly(t *testing.T) {
 	// Assert
 	select {
 	case run := <-done:
-		if run.Outcome != model.OutcomeFailNoLogins || !hasReason(run.Login, "canceled") {
-			t.Errorf("outcome = %q, login = %+v; want fail_no_logins with canceled logins", run.Outcome, run.Login)
+		if run.Outcome != model.OutcomeFailNoLogins || run.Login.Cancelled != 4 || run.Login.Failed != 0 {
+			t.Errorf("outcome = %q, login = %+v; want fail_no_logins with 4 cancelled logins", run.Outcome, run.Login)
 		}
 		if f.meHits.Load() != 0 {
 			t.Errorf("protected endpoint hit %d times after cancel during login", f.meHits.Load())

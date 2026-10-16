@@ -26,6 +26,9 @@ type authFixture struct {
 	// until the client gives up.
 	loginDelay time.Duration
 	loginBlock bool
+	// loginBlockFrom, when > 0, holds the loginBlockFrom-th login and every
+	// later one; earlier logins answer normally.
+	loginBlockFrom int32
 	// firstTokenExpired makes /me reject each user's first-issued token,
 	// so only a re-login gets through.
 	firstTokenExpired bool
@@ -73,7 +76,7 @@ func newAuthFixture(t *testing.T, users int) *authFixture {
 }
 
 func (f *authFixture) login(w http.ResponseWriter, r *http.Request) {
-	f.loginHits.Add(1)
+	hit := f.loginHits.Add(1)
 	n := f.loginInFlight.Add(1)
 	defer f.loginInFlight.Add(-1)
 	for {
@@ -87,7 +90,7 @@ func (f *authFixture) login(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Username, Password string }
 	decodeErr := json.NewDecoder(r.Body).Decode(&in)
 	_, _ = io.Copy(io.Discard, r.Body)
-	if f.loginBlock {
+	if f.loginBlock || (f.loginBlockFrom > 0 && hit >= f.loginBlockFrom) {
 		<-r.Context().Done()
 		return
 	}
