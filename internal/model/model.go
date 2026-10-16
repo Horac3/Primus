@@ -14,6 +14,10 @@ const (
 	AuthTypeAPIKey       AuthType = "api_key"
 	AuthTypeBasic        AuthType = "basic"
 	AuthTypeLoginChained AuthType = "login_chained"
+	// AuthTypeCredentialPool carries one worker's extracted pool token as a
+	// ready-to-send header (Header: Value). It is built per worker at run
+	// time and never persisted as the global auth.
+	AuthTypeCredentialPool AuthType = "credential_pool"
 )
 
 // AuthConfig holds the single global authentication configuration.
@@ -116,6 +120,98 @@ type TestConfig struct {
 	BurstPattern  *BurstPattern     `json:"burst_pattern,omitempty"`
 	Assertions    Assertions        `json:"assertions"`
 	PayloadPool   []json.RawMessage `json:"payload_pool,omitempty"`
+	// CredentialPoolID selects a credential pool whose per-worker logins
+	// replace global auth for this run. Empty means global auth applies.
+	CredentialPoolID string `json:"credential_pool_id,omitempty"`
+}
+
+// MaxCredentialPoolRows caps how many credentials one pool may hold.
+const MaxCredentialPoolRows = 10000
+
+// Credential is one pre-existing account on the target: arbitrary named
+// fields (username, password, email, client_id, ...) filled into the
+// login template's {{field}} placeholders.
+type Credential map[string]string
+
+// ExtractFrom says where an Extraction reads its value.
+type ExtractFrom string
+
+const (
+	ExtractFromBody   ExtractFrom = "body"
+	ExtractFromHeader ExtractFrom = "header"
+)
+
+// Extraction pulls one value out of a response: a dot path into a JSON
+// body (data.access_token) or a header name (X-Auth-Token). Prefix, when
+// set, is stripped from the start of the value (for example "Bearer ").
+type Extraction struct {
+	From   ExtractFrom `json:"from"`
+	Path   string      `json:"path"`
+	Prefix string      `json:"prefix,omitempty"`
+}
+
+// LoginSpec is the request template a worker sends once to log in as its
+// credential. URL, header values and body may contain {{field}} placeholders.
+type LoginSpec struct {
+	Method     string            `json:"method"`
+	URL        string            `json:"url"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	Extraction Extraction        `json:"extraction"`
+}
+
+// ApplySpec says how the extracted token is sent on each request: header
+// Header with value Format, where {{token}} is the extracted value.
+type ApplySpec struct {
+	Header string `json:"header"`
+	Format string `json:"format"`
+}
+
+// Default apply step: Authorization: Bearer {{token}}.
+const (
+	DefaultApplyHeader      = "Authorization"
+	DefaultApplyFormat      = "Bearer {{token}}"
+	DefaultLoginConcurrency = 20
+)
+
+// CredentialPool is a named set of pre-existing accounts plus how to log
+// each one in and how to send the resulting token. Primus never creates
+// accounts on the target.
+type CredentialPool struct {
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	Credentials      []Credential `json:"credentials,omitempty"`
+	Login            LoginSpec    `json:"login"`
+	Apply            ApplySpec    `json:"apply"`
+	AllowReuse       bool         `json:"allow_reuse,omitempty"`
+	LoginConcurrency int          `json:"login_concurrency,omitempty"`
+	ReloginOn401     bool         `json:"relogin_on_401,omitempty"`
+}
+
+// LoginOutcome is one worker's login attempt. It carries no secrets: the
+// credential is identified by its row index only.
+type LoginOutcome struct {
+	Index      int           `json:"index"`
+	Success    bool          `json:"success"`
+	StatusCode int           `json:"status_code,omitempty"`
+	Latency    time.Duration `json:"latency"`
+	ErrorClass string        `json:"error_class,omitempty"`
+}
+
+// LoginSummary is the login phase's report attached to a run. Login latency
+// is measured here and never mixed into the request latency stats.
+type LoginSummary struct {
+	PoolID            string         `json:"pool_id"`
+	PoolName          string         `json:"pool_name"`
+	Attempted         int            `json:"attempted"`
+	Succeeded         int            `json:"succeeded"`
+	Failed            int            `json:"failed"`
+	P50Millis         int            `json:"p50_millis"`
+	P95Millis         int            `json:"p95_millis"`
+	FailureReasons    []ErrorDetail  `json:"failure_reasons,omitempty"`
+	Relogins          int            `json:"relogins,omitempty"`
+	ReloginsSucceeded int            `json:"relogins_succeeded,omitempty"`
+	Outcomes          []LoginOutcome `json:"outcomes,omitempty"`
 }
 
 // RunSummary holds aggregate metrics for a completed run.
@@ -151,6 +247,9 @@ const (
 	// OutcomeNoAssertions — run completed with ≥1 success but no assertions were configured,
 	// so pass/fail is indeterminate (neutral).
 	OutcomeNoAssertions RunOutcome = "no_assertions"
+	// OutcomeFailNoLogins — a credential-pool run where every login failed,
+	// so nothing was dispatched (never run unauthenticated by accident).
+	OutcomeFailNoLogins RunOutcome = "fail_no_logins"
 )
 
 // AssertionResult is one configured assertion and whether it held.
@@ -188,4 +287,5 @@ type Run struct {
 	AssertionResults []AssertionResult `json:"assertion_results,omitempty"`
 	LatencyBuckets   []int             `json:"latency_buckets,omitempty"`
 	TimeSeries       []Point           `json:"time_series,omitempty"`
+	Login            *LoginSummary     `json:"login,omitempty"`
 }
