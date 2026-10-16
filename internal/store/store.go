@@ -64,6 +64,17 @@ func Migrate(db *sql.DB) error {
 			error      TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS credential_pools (
+			id      TEXT PRIMARY KEY,
+			name    TEXT NOT NULL,
+			payload TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS credentials (
+			pool_id TEXT NOT NULL,
+			idx     INTEGER NOT NULL,
+			fields  TEXT NOT NULL,
+			PRIMARY KEY (pool_id, idx)
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
