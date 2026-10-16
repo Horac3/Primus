@@ -57,7 +57,7 @@ var templateFuncs = template.FuncMap{
 		case model.OutcomeNoAssertions:
 			return "◎ Completed — no assertions configured"
 		case model.OutcomeFailNoRequests:
-			return "✗ FAILED — no successful requests"
+			return "✗ FAILED — no requests completed"
 		case model.OutcomeFailNoLogins:
 			return "✗ FAILED — no successful logins"
 		default:

@@ -2,6 +2,7 @@
 <div class="card">
   <p style="margin-bottom:.5rem">
     <span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span>
+    {{if .Stopped}}&nbsp;<span class="muted">⏹ Stopped early</span>{{end}}
     &nbsp;<span class="muted">Run <a href="/runs/{{.ID}}" style="color:#3b82d4">{{.ID}}</a></span>
   </p>
   <table>

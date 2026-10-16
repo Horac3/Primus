@@ -155,12 +155,24 @@ func Bucketize(samples []int) []int {
 // Public helper: EvaluateAssertions
 // ============================================================
 
+// noRequestsCompleted reports whether the run recorded no HTTP response at
+// all: nothing was dispatched (e.g. stopped early) or every request was a
+// transport error. Such a run can never pass, whatever the assertions say
+// (0 errors out of 0 requests must not satisfy a max error rate).
+func noRequestsCompleted(s model.RunSummary) bool {
+	for _, count := range s.StatusCounts {
+		if count > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // EvaluateAssertions returns true if all configured assertions hold.
-// Baseline rule: if 100% of requests failed (ErrorRate==1.0 and no successful
-// status codes recorded), it always returns false regardless of configured assertions.
+// Baseline rule: if no request completed (no status codes recorded), it
+// always returns false regardless of configured assertions.
 func EvaluateAssertions(a model.Assertions, s model.RunSummary) bool {
-	// Baseline: 100% failure is always a fail.
-	if s.ErrorRate >= 1.0 && len(s.StatusCounts) == 0 {
+	if noRequestsCompleted(s) {
 		return false
 	}
 	// Error rate
@@ -188,8 +200,8 @@ func EvaluateAssertions(a model.Assertions, s model.RunSummary) bool {
 
 // DetermineOutcome returns the tri-state RunOutcome for a completed run.
 func DetermineOutcome(a model.Assertions, s model.RunSummary) model.RunOutcome {
-	// Baseline: 100% failure overrides everything.
-	if s.ErrorRate >= 1.0 && len(s.StatusCounts) == 0 {
+	// Baseline: no completed request overrides everything.
+	if noRequestsCompleted(s) {
 		return model.OutcomeFailNoRequests
 	}
 	// No assertions configured and at least one success → neutral.
@@ -655,7 +667,9 @@ func RunWithPool(ctx context.Context, req model.RequestDefinition, cfg model.Tes
 		logins = newPoolLogins(client, *pool)
 		workers = logins.loginWorkers(ctx, cfg.Concurrency)
 		if len(workers) == 0 || ctx.Err() != nil {
-			return loginAbortedRun(cfg, logins.summary(), len(workers)), nil
+			run := loginAbortedRun(cfg, logins.summary(), len(workers))
+			run.Stopped = ctx.Err() != nil
+			return run, nil
 		}
 	}
 
@@ -688,6 +702,10 @@ func RunWithPool(ctx context.Context, req model.RequestDefinition, cfg model.Tes
 	// in a send or burst-idle select; it returns on runCtx.Done.
 	<-feedDone
 	run := buildRun(cfg, summary, CheckAssertions(cfg.Assertions, summary), buckets, startedAt, finishedAt, series)
+	// Stopped: the caller cancelled before the run's own stop condition. A
+	// count run that already fired every request finished, even if a Stop
+	// raced in afterwards; a Duration deadline lives on runCtx, not ctx.
+	run.Stopped = ctx.Err() != nil && !(cfg.TotalRequests > 0 && summary.TotalRequests >= cfg.TotalRequests)
 	if logins != nil {
 		run.Login = logins.summary()
 	}

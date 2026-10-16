@@ -21,8 +21,15 @@ Unexpected status codes count as errors too, but only when
 | State | Banner | Meaning |
 |---|---|---|
 | PASS | green `✓ PASSED` | Every configured assertion held. |
-| FAILED | red `✗ FAILED` | At least one assertion failed — or 100% of requests failed, which fails unconditionally. |
+| FAILED | red `✗ FAILED` | At least one assertion failed — or no request completed (`✗ FAILED — no requests completed`), which fails unconditionally. |
 | No assertions | neutral `◎ Completed — no assertions configured` | Requests went through, but nothing was asserted. |
+
+"No requests completed" means no HTTP response came back at all: every
+request was a transport error, or the run was stopped before the first
+response. It fails even when the only assertion is a max error rate —
+0 errors out of 0 requests is not a pass. A run stopped with the Stop
+button keeps the verdict its completed requests earned, and the result
+card marks it `⏹ Stopped early`.
 
 The third state exists because of a real bug this rule prevents: a run
 with zero assertions used to render a green PASS, which reads as "this

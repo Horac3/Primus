@@ -142,6 +142,51 @@ func TestRunCmd_FailingAssertions_ExitsOne(t *testing.T) {
 	}
 }
 
+func TestRunCmd_ZeroCompletedRequests_ExitsOne(t *testing.T) {
+	// Arrange — run cancelled before any request completes, only a
+	// max-error-rate assertion (0 errors of 0 requests must not pass)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	db := newTestDB(t)
+	reqDef := model.RequestDefinition{
+		ID: "req-cli-zero", Name: "health",
+		Method: "GET", URLTemplate: srv.URL + "/health",
+	}
+	if err := store.SaveRequestDefinition(db, reqDef); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	cfg := model.TestConfig{
+		ID:          "cfg-cli-zero",
+		RequestID:   "req-cli-zero",
+		Mode:        model.ModeLoad,
+		Concurrency: 2,
+		Duration:    10 * time.Second,
+		Assertions:  model.Assertions{MaxErrorRate: 0.05},
+	}
+	cfgPath := writeConfigFile(t, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+
+	// Act
+	code := runCmd(ctx, []string{cfgPath}, &out, db)
+
+	// Assert — exit 1 with the no-requests outcome
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1; output: %s", code, out.String())
+	}
+	var summary map[string]any
+	if err := json.Unmarshal(out.Bytes(), &summary); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, out.String())
+	}
+	if got := summary["outcome"]; got != string(model.OutcomeFailNoRequests) {
+		t.Errorf("summary[outcome] = %v, want %q", got, model.OutcomeFailNoRequests)
+	}
+}
+
 // ============================================================
 // Soak mode — runs until the duration elapses, exits 0 on pass
 // ============================================================

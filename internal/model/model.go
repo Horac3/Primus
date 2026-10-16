@@ -241,8 +241,8 @@ const (
 	OutcomePass RunOutcome = "pass"
 	// OutcomeFail — at least one configured assertion failed.
 	OutcomeFail RunOutcome = "fail"
-	// OutcomeFailNoRequests — 100% of requests failed (transport or unexpected status);
-	// applies even when no assertions are configured.
+	// OutcomeFailNoRequests — no request completed (nothing dispatched, or every
+	// request was a transport error); applies even when no assertions are configured.
 	OutcomeFailNoRequests RunOutcome = "fail_no_requests"
 	// OutcomeNoAssertions — run completed with ≥1 success but no assertions were configured,
 	// so pass/fail is indeterminate (neutral).
@@ -285,7 +285,10 @@ type Run struct {
 	Outcome          RunOutcome        `json:"outcome"`
 	Passed           bool              `json:"passed"`
 	AssertionResults []AssertionResult `json:"assertion_results,omitempty"`
-	LatencyBuckets   []int             `json:"latency_buckets,omitempty"`
-	TimeSeries       []Point           `json:"time_series,omitempty"`
-	Login            *LoginSummary     `json:"login,omitempty"`
+	// Stopped is true when the run was cancelled (Stop button or context
+	// cancel) before reaching its own stop condition.
+	Stopped        bool          `json:"stopped,omitempty"`
+	LatencyBuckets []int         `json:"latency_buckets,omitempty"`
+	TimeSeries     []Point       `json:"time_series,omitempty"`
+	Login          *LoginSummary `json:"login,omitempty"`
 }

@@ -54,7 +54,7 @@ func TestEvaluateAssertions_TableDriven(t *testing.T) {
 		{
 			name:       "no assertions always passes",
 			assertions: model.Assertions{},
-			summary:    model.RunSummary{ErrorRate: 0.5, P95Millis: 9999},
+			summary:    model.RunSummary{StatusCounts: map[int]int{200: 1}, ErrorCount: 1, ErrorRate: 0.5, P95Millis: 9999},
 			wantPassed: true,
 		},
 		{
