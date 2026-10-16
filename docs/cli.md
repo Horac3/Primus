@@ -45,11 +45,17 @@ primus run <config.json> [--db <path>]
     "p95_millis": 480,
     "p99_millis": 900,
     "error_rate": 0.0,
-    "total_requests": 20
+    "total_requests": 20,
+    "cancelled": 0
   },
   "passed": true
 }
 ```
+
+`total_requests` counts requests that got a response or a transport error.
+`cancelled` counts requests that were still in flight when the run ended (a
+cancelled CLI run, or a `duration` deadline). They are in no other field. See
+"Cancelled requests" in [assertions](assertions.md).
 
 `stderr` carries human-readable errors; `stdout` is always the JSON above
 (on a completed run), so a pipeline step can parse or archive it.

@@ -20,7 +20,8 @@ tenant).
    run's duration.
 3. **Report.** The result shows a **Logins** section: attempted, succeeded,
    failed, login p50/p95, and the top failure reasons (`HTTP 401`,
-   `timeout`, `token not found: ...`).
+   `timeout`, `token not found: ...`). Logins interrupted by Stop are shown
+   as `interrupted by stop` (`cancelled` in JSON), not as failures.
 
 Failure rules:
 
