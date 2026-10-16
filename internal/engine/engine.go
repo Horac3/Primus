@@ -212,15 +212,16 @@ type ProbeResult struct {
 	ErrMsg      string `json:"err_msg,omitempty"`
 }
 
-// applyAuth injects the global auth credentials — unless the request
-// already carries that header (explicit per-endpoint override wins).
+// applyAuth injects the run's auth credentials — global auth, or one
+// worker's credential-pool token — unless the request already carries
+// that header (explicit per-endpoint override wins).
 func applyAuth(req *http.Request, auth model.AuthConfig) {
 	switch auth.Type {
 	case model.AuthTypeBearer:
 		if auth.Token != "" && req.Header.Get("Authorization") == "" {
 			req.Header.Set("Authorization", "Bearer "+auth.Token)
 		}
-	case model.AuthTypeAPIKey:
+	case model.AuthTypeAPIKey, model.AuthTypeCredentialPool:
 		if auth.Header != "" && auth.Value != "" && req.Header.Get(auth.Header) == "" {
 			req.Header.Set(auth.Header, auth.Value)
 		}
@@ -341,23 +342,31 @@ func feed(ctx context.Context, jobs chan<- struct{}, cfg model.TestConfig, start
 	}
 }
 
-// runWorkers launches concurrency workers, each pulling from jobs and sending
-// results to results. Closes results when all workers finish.
+// workerAuth is one worker's identity. The worker goroutine is its single
+// owner: auth is only read and replaced (on re-login) by that goroutine.
+type workerAuth struct {
+	auth model.AuthConfig
+	// relogin, when set, fetches a fresh auth after a 401. It is called
+	// at most once per worker.
+	relogin func(ctx context.Context) (model.AuthConfig, bool)
+}
+
+// runWorkers launches one worker per entry in workers, each pulling from
+// jobs and sending results to results. Closes results when all finish.
 func runWorkers(
 	ctx context.Context,
 	req model.RequestDefinition,
-	auth model.AuthConfig,
+	workers []workerAuth,
 	payloadPool []json.RawMessage,
 	jobs <-chan struct{},
 	results chan<- result,
-	concurrency int,
 	client *http.Client,
 ) {
 	var wg sync.WaitGroup
 	var nextPayload atomic.Uint64
-	for i := 0; i < concurrency; i++ {
+	for _, w := range workers {
 		wg.Add(1)
-		go func() {
+		go func(w workerAuth) {
 			defer wg.Done()
 			for range jobs {
 				if ctx.Err() != nil {
@@ -368,14 +377,21 @@ func runWorkers(
 					index := (nextPayload.Add(1) - 1) % uint64(len(payloadPool))
 					request.Body = &model.BodyTemplate{Raw: append([]byte(nil), payloadPool[index]...)}
 				}
-				r := execRequest(ctx, client, request, auth)
+				r := execRequest(ctx, client, request, w.auth)
 				select {
 				case results <- r:
 				case <-ctx.Done():
 					return
 				}
+				if r.statusCode == http.StatusUnauthorized && w.relogin != nil {
+					relogin := w.relogin
+					w.relogin = nil // re-login once per worker
+					if fresh, ok := relogin(ctx); ok {
+						w.auth = fresh
+					}
+				}
 			}
-		}()
+		}(w)
 	}
 	go func() {
 		wg.Wait()
@@ -609,10 +625,41 @@ func buildRun(cfg model.TestConfig, summary model.RunSummary, checks []model.Ass
 // (exactly one must be set; see ValidateTestConfig). Burst pacing applies
 // when cfg.BurstPattern is set. Returns the aggregated Run.
 func RunWithSnapshot(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig, snapshot *atomic.Pointer[[]model.Point]) (model.Run, error) {
+	return RunWithPool(ctx, req, cfg, auth, nil, snapshot)
+}
+
+// RunWithPool is RunWithSnapshot with an optional credential pool. When
+// pool is non-nil, a login phase runs before measurement starts: each
+// worker logs in as its own credential and sends that token instead of
+// global auth. Workers whose login failed are excluded; when no login
+// succeeds the run returns OutcomeFailNoLogins without dispatching.
+func RunWithPool(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig, pool *model.CredentialPool, snapshot *atomic.Pointer[[]model.Point]) (model.Run, error) {
 	if err := ValidateTestConfig(cfg); err != nil {
 		return model.Run{}, err
 	}
+	if pool != nil {
+		if err := ValidatePool(cfg, *pool); err != nil {
+			return model.Run{}, err
+		}
+	}
 
+	client := newClient(cfg.Concurrency)
+	defer client.CloseIdleConnections()
+
+	workers := make([]workerAuth, cfg.Concurrency)
+	for i := range workers {
+		workers[i] = workerAuth{auth: auth}
+	}
+	var logins *poolLogins
+	if pool != nil {
+		logins = newPoolLogins(client, *pool)
+		workers = logins.loginWorkers(ctx, cfg.Concurrency)
+		if len(workers) == 0 || ctx.Err() != nil {
+			return loginAbortedRun(cfg, logins.summary(), len(workers)), nil
+		}
+	}
+
+	// Measurement starts only now, after every login has finished.
 	runCtx := ctx
 	if cfg.Duration > 0 {
 		var cancel context.CancelFunc
@@ -620,7 +667,6 @@ func RunWithSnapshot(ctx context.Context, req model.RequestDefinition, cfg model
 		defer cancel()
 	}
 
-	client := newClient(cfg.Concurrency)
 	buf := cfg.Concurrency
 	if cfg.BurstPattern != nil && cfg.BurstPattern.Count > buf {
 		buf = cfg.BurstPattern.Count
@@ -629,12 +675,23 @@ func RunWithSnapshot(ctx context.Context, req model.RequestDefinition, cfg model
 	results := make(chan result, cfg.Concurrency)
 
 	startedAt := time.Now()
-	go feed(runCtx, jobs, cfg, startedAt)
-	runWorkers(runCtx, req, auth, cfg.PayloadPool, jobs, results, cfg.Concurrency, client)
+	feedDone := make(chan struct{})
+	go func() {
+		defer close(feedDone)
+		feed(runCtx, jobs, cfg, startedAt)
+	}()
+	runWorkers(runCtx, req, workers, cfg.PayloadPool, jobs, results, client)
 
 	summary, buckets, series := aggregate(results, cfg.Assertions, startedAt, snapshot)
 	finishedAt := time.Now()
-	return buildRun(cfg, summary, CheckAssertions(cfg.Assertions, summary), buckets, startedAt, finishedAt, series), nil
+	// Workers exit on cancel without draining jobs, so feed may still be
+	// in a send or burst-idle select; it returns on runCtx.Done.
+	<-feedDone
+	run := buildRun(cfg, summary, CheckAssertions(cfg.Assertions, summary), buckets, startedAt, finishedAt, series)
+	if logins != nil {
+		run.Login = logins.summary()
+	}
+	return run, nil
 }
 
 func Run(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
