@@ -80,7 +80,7 @@ Lives under `tools/`. Local Ollama only; never a hosted model.
     output says it was truncated.
 - **FR-META-02** — Format validation: a draft is accepted only if it matches the project's Conventional Commits format
   from `CLAUDE.md`: `type(scope): subject` with a scope from the allowed list (`engine`, `model`, `store`, `web`, `ui`,
-  `insight`, `author`, `auth`, `importer`, `cli`, `docs`, `docker`, `ci`), bulleted body, final `Tests:` line. An invalid
+  `insight`, `author`, `auth`, `importer`, `cli`, `docs`, `docker`, `ci`, `tools`), bulleted body, final `Tests:` line. An invalid
   draft is never printed as if valid.
 - **FR-META-03** — Fallback: with Ollama absent, failing, slower than a time cap or returning an invalid draft, a
   rules-based draft is built from the staged paths (scope from the path, type from the change kind) and the output says

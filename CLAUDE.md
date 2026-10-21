@@ -53,7 +53,7 @@ All checks go through `.claude/kit/check.sh` (configured in `.claude/kit/command
 8. **Docker:** `CGO_ENABLED=0`, distroless `nonroot`, no shell in the final image, `/data` owned by uid 65532.
 
 ## Commit scopes
-`engine`, `model`, `store`, `web`, `ui`, `insight`, `author`, `auth`, `importer`, `cli`, `docs`, `docker`, `ci`.
+`engine`, `model`, `store`, `web`, `ui`, `insight`, `author`, `auth`, `importer`, `cli`, `docs`, `docker`, `ci`, `tools`.
 Body: bullets for each specific change, then a final `Tests:` line saying what the tests cover.
 
 ## Project-specific working rules
