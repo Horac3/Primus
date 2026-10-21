@@ -129,6 +129,27 @@ func TestSaveAndGetRequestDefinition(t *testing.T) {
 	}
 }
 
+func TestSaveAndGetRequestDefinition_KeepsNotes(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	def := model.RequestDefinition{ID: "req-n", Name: "n", Method: "GET", URLTemplate: "https://example.com", Notes: "Read this first."}
+
+	if err := store.SaveRequestDefinition(db, def); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	got, err := store.GetRequestDefinition(db, "req-n")
+	if err != nil {
+		t.Fatalf("GetRequestDefinition: %v", err)
+	}
+
+	if got.Notes != "Read this first." {
+		t.Errorf("Notes: got %q", got.Notes)
+	}
+}
+
 func TestListRequestDefinitions(t *testing.T) {
 	// Arrange
 	db, cleanup := tempDB(t)

@@ -84,6 +84,8 @@ type RequestDefinition struct {
 	Headers     map[string]string    `json:"headers,omitempty"`
 	QueryParams map[string]ParamSpec `json:"query_params,omitempty"`
 	Body        *BodyTemplate        `json:"body,omitempty"`
+	// Notes is free text shown with the endpoint; the built-in examples use it to teach.
+	Notes string `json:"notes,omitempty"`
 	// CollectionID is the collection the endpoint belongs to. The requests.collection_id column is
 	// authoritative; the store fills this field on read.
 	CollectionID string `json:"collection_id,omitempty"`
