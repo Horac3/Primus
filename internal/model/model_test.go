@@ -297,3 +297,28 @@ func TestRun_TimeSeriesRoundTrip(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+func TestRateFields_JSONRoundTrip(t *testing.T) {
+	cfg := model.TestConfig{Mode: model.ModeRate, Concurrency: 20, Duration: 15 * time.Second, TargetRate: 500}
+	run := model.Run{Outcome: model.OutcomeFailRateNotSustained, Summary: model.RunSummary{Dropped: 7, TargetRate: 500, AchievedRate: 493.5}}
+
+	var gotCfg model.TestConfig
+	var gotRun model.Run
+	for _, rt := range []struct{ in, out any }{{cfg, &gotCfg}, {run, &gotRun}} {
+		b, err := json.Marshal(rt.in)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if err := json.Unmarshal(b, rt.out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+	}
+
+	if gotCfg.Mode != model.ModeRate || gotCfg.TargetRate != 500 {
+		t.Errorf("config = %+v, want mode rate and target_rate 500", gotCfg)
+	}
+	s := gotRun.Summary
+	if gotRun.Outcome != model.OutcomeFailRateNotSustained || s.Dropped != 7 || s.TargetRate != 500 || s.AchievedRate != 493.5 {
+		t.Errorf("run = %+v, want the rate fields back", gotRun)
+	}
+}

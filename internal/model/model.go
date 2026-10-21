@@ -93,6 +93,8 @@ const (
 	ModeBurst     Mode = "burst"
 	ModeAuthProbe Mode = "auth_probe"
 	ModeSoak      Mode = "soak"
+	// ModeRate releases requests on a fixed schedule (open loop); see TargetRate.
+	ModeRate Mode = "rate"
 )
 
 // BurstPattern describes the shape of a burst test.
@@ -129,6 +131,10 @@ type TestConfig struct {
 	// AuthSource picks the run's identity; empty keeps the default (an
 	// active pool, else global auth).
 	AuthSource AuthSource `json:"auth_source,omitempty"`
+	// TargetRate is the requests/sec a rate-mode run releases on a fixed
+	// schedule, whether or not earlier responses have returned. In rate mode
+	// Concurrency is the maximum number of requests in flight.
+	TargetRate float64 `json:"target_rate,omitempty"`
 }
 
 // AuthSource says which identity a run sends.
@@ -270,6 +276,13 @@ type RunSummary struct {
 	// context ended (Stop, or the Duration deadline). They are in no other
 	// field: not TotalRequests, errors, latencies or status counts.
 	Cancelled int `json:"cancelled"`
+	// Dropped counts rate-mode requests that were due but not released
+	// because every in-flight slot was busy. They are in no other field.
+	Dropped int `json:"dropped,omitempty"`
+	// TargetRate and AchievedRate (released requests per measured second)
+	// are set for rate-mode runs only.
+	TargetRate   float64 `json:"target_rate,omitempty"`
+	AchievedRate float64 `json:"achieved_rate,omitempty"`
 }
 
 // RunOutcome is the tri-state result of a Run.
@@ -289,6 +302,9 @@ const (
 	// OutcomeFailNoLogins — a credential-pool run where every login failed,
 	// so nothing was dispatched (never run unauthenticated by accident).
 	OutcomeFailNoLogins RunOutcome = "fail_no_logins"
+	// OutcomeFailRateNotSustained — a rate-mode run dropped at least one
+	// request because the in-flight cap was reached.
+	OutcomeFailRateNotSustained RunOutcome = "fail_rate_not_sustained"
 )
 
 // AssertionResult is one configured assertion and whether it held.
