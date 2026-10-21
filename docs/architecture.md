@@ -56,6 +56,6 @@ is shallow, so churn data is unreliable. Both files are candidates for splitting
 ## Known debt and contradictions
 - `AGENTS.md`, `.bobignore`, `primus-scaffold-plan.md` and the root `web/` directory are Bob-era leftovers.
 - `CONTRIBUTING.md` described a non-conventional commit format; updated to Conventional Commits.
-- `deploy/docker-compose.yml` sets `PRIMUS_ANALYZER: ollama` on the app service, and has no `depends_on` for the
-  `ai`-profile Ollama service. Check what happens when the profile is off.
+- `deploy/docker-compose.yml` defaults `PRIMUS_ANALYZER` to `rules`; AI needs `PRIMUS_ANALYZER=ollama` plus
+  `--profile ai`. There is still no `depends_on` for the Ollama service (left to the user).
 - README still calls auth-probe "basic support"; check against `docs/auth-probe.md` before the next release.

@@ -9,7 +9,8 @@ services:
     volumes:
       - primus-data:/data
     environment:
-      PRIMUS_ANALYZER: ollama
+      # rules unless set: PRIMUS_ANALYZER=ollama docker compose --profile ai up
+      PRIMUS_ANALYZER: ${PRIMUS_ANALYZER:-rules}
       PRIMUS_LLM_URL: http://ollama:11434
       PRIMUS_LLM_MODEL: qwen2.5:3b
     restart: unless-stopped

@@ -74,17 +74,26 @@ glance in the job log.
 
 ## Local Ollama service
 
-From the `deploy/` directory, start Primus with the optional Ollama service:
+The compose file runs Primus with the rules analyzer unless you set
+`PRIMUS_ANALYZER`. A plain `docker compose up` needs no Ollama and shows no
+AI features. From the `deploy/` directory, start Primus with the optional
+Ollama service and switch the analyzer on in the same command:
 
 ```sh
-docker compose --profile ai up --build -d
+PRIMUS_ANALYZER=ollama docker compose --profile ai up --build -d
 docker compose exec ollama ollama pull qwen2.5:3b
 ```
+
+In PowerShell, run `$env:PRIMUS_ANALYZER = "ollama"` first, then the same `docker compose` command without the prefix.
+
+Set both. With the profile and no `PRIMUS_ANALYZER=ollama`, Ollama runs but Primus doesn't use it.
+With `PRIMUS_ANALYZER=ollama` and no profile, Primus points at an `ollama` host that doesn't exist:
+insights fall back to rules, and the authoring buttons fail when you use them.
 
 For NVIDIA GPU access, install and configure the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), then start with the GPU override:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up --build -d
+PRIMUS_ANALYZER=ollama docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up --build -d
 ```
 
 The Ollama service keeps downloaded models in the `ollama-models` volume. Primus uses rules-based insights by default. With `PRIMUS_ANALYZER=ollama` and the `ai` profile active, it also enables Ollama-backed insights, natural-language request authoring, test-config authoring, and one-time sample-payload generation in the endpoint builder. Generated request and test-config details only pre-fill the form; they are not saved or run until you explicitly submit it. Payload variants are generated up front from the endpoint's JSON body template, capped at 500, and cycle through subsequent requests when the submitted run starts. Test-config suggestions are rejected if they exceed the default limits of 2,000 concurrent workers, one hour per timed run, or 1,000,000 requests per count-based run. These ceilings can be changed with `PRIMUS_AUTHOR_MAX_CONCURRENCY`, `PRIMUS_AUTHOR_MAX_DURATION_SECONDS`, and `PRIMUS_AUTHOR_MAX_TOTAL_REQUESTS`.
