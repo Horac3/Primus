@@ -88,59 +88,85 @@ func Migrate(db *sql.DB) error {
 			id      INTEGER PRIMARY KEY CHECK (id = 1),
 			pool_id TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS collections (
+			id           TEXT PRIMARY KEY,
+			name         TEXT NOT NULL,
+			base_url     TEXT NOT NULL DEFAULT '',
+			seed_id      TEXT NOT NULL DEFAULT '',
+			seed_version INTEGER NOT NULL DEFAULT 0,
+			created_at   TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_name ON collections (name COLLATE NOCASE)`,
+		`CREATE TABLE IF NOT EXISTS seed_tombstones (
+			seed_id    TEXT PRIMARY KEY,
+			deleted_at TEXT NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+	if err := migrateCollections(db); err != nil {
+		return err
+	}
 	return migrateMaskedFields(db)
 }
 
-// SaveRequestDefinition inserts or replaces a RequestDefinition.
+// SaveRequestDefinition inserts or replaces a RequestDefinition. An empty CollectionID files the
+// endpoint under "My endpoints", creating that collection if needed.
 func SaveRequestDefinition(db *sql.DB, r model.RequestDefinition) error {
+	if r.CollectionID == "" {
+		id, err := ensureDefaultCollection(db)
+		if err != nil {
+			return err
+		}
+		r.CollectionID = id
+	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		return fmt.Errorf("marshal RequestDefinition: %w", err)
 	}
 	_, err = db.Exec(
-		`INSERT OR REPLACE INTO requests (id, name, method, url_template, payload) VALUES (?,?,?,?,?)`,
-		r.ID, r.Name, r.Method, r.URLTemplate, string(b),
+		`INSERT OR REPLACE INTO requests (id, name, method, url_template, payload, collection_id) VALUES (?,?,?,?,?,?)`,
+		r.ID, r.Name, r.Method, r.URLTemplate, string(b), r.CollectionID,
 	)
 	return err
 }
 
 // GetRequestDefinition retrieves a RequestDefinition by ID.
 func GetRequestDefinition(db *sql.DB, id string) (model.RequestDefinition, error) {
-	row := db.QueryRow(`SELECT payload FROM requests WHERE id = ?`, id)
-	var payload string
-	if err := row.Scan(&payload); err != nil {
+	row := db.QueryRow(`SELECT payload, collection_id FROM requests WHERE id = ?`, id)
+	var payload, collectionID string
+	if err := row.Scan(&payload, &collectionID); err != nil {
 		return model.RequestDefinition{}, fmt.Errorf("GetRequestDefinition %q: %w", id, err)
 	}
 	var r model.RequestDefinition
 	if err := json.Unmarshal([]byte(payload), &r); err != nil {
 		return model.RequestDefinition{}, fmt.Errorf("unmarshal RequestDefinition: %w", err)
 	}
+	r.CollectionID = collectionID
 	return r, nil
 }
 
 // ListRequestDefinitions returns all stored RequestDefinitions.
 func ListRequestDefinitions(db *sql.DB) ([]model.RequestDefinition, error) {
-	rows, err := db.Query(`SELECT payload FROM requests`)
+	rows, err := db.Query(`SELECT payload, collection_id FROM requests`)
 	if err != nil {
 		return nil, fmt.Errorf("ListRequestDefinitions: %w", err)
 	}
 	defer rows.Close()
 	var out []model.RequestDefinition
 	for rows.Next() {
-		var payload string
-		if err := rows.Scan(&payload); err != nil {
+		var payload, collectionID string
+		if err := rows.Scan(&payload, &collectionID); err != nil {
 			return nil, err
 		}
 		var r model.RequestDefinition
 		if err := json.Unmarshal([]byte(payload), &r); err != nil {
 			return nil, err
 		}
+		r.CollectionID = collectionID
 		out = append(out, r)
 	}
 	return out, rows.Err()

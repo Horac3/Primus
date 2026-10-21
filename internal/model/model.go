@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -83,6 +84,39 @@ type RequestDefinition struct {
 	Headers     map[string]string    `json:"headers,omitempty"`
 	QueryParams map[string]ParamSpec `json:"query_params,omitempty"`
 	Body        *BodyTemplate        `json:"body,omitempty"`
+	// CollectionID is the collection the endpoint belongs to. The requests.collection_id column is
+	// authoritative; the store fills this field on read.
+	CollectionID string `json:"collection_id,omitempty"`
+}
+
+// Collection is a named set of endpoints. BaseURL, when set, replaces a leading {{base_url}} in
+// endpoint URLs at probe and run time. SeedID is set for built-in collections (D-017).
+type Collection struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	BaseURL     string `json:"base_url,omitempty"`
+	SeedID      string `json:"seed_id,omitempty"`
+	SeedVersion int    `json:"seed_version,omitempty"`
+}
+
+// BuiltIn reports whether the collection came from the embedded seed.
+func (c Collection) BuiltIn() bool { return c.SeedID != "" }
+
+// BaseURLPlaceholder is the prefix an endpoint URL uses to take its collection's base URL.
+const BaseURLPlaceholder = "{{base_url}}"
+
+// UsesBaseURL reports whether the URL template starts with the base URL placeholder.
+func UsesBaseURL(urlTemplate string) bool {
+	return strings.HasPrefix(urlTemplate, BaseURLPlaceholder)
+}
+
+// ExpandBaseURL replaces a leading {{base_url}} with base, dropping base's trailing slashes so the
+// join has exactly the slash the template wrote. Other templates are returned unchanged.
+func ExpandBaseURL(urlTemplate, base string) string {
+	if !UsesBaseURL(urlTemplate) {
+		return urlTemplate
+	}
+	return strings.TrimRight(base, "/") + strings.TrimPrefix(urlTemplate, BaseURLPlaceholder)
 }
 
 // Mode is the type of test to run.
