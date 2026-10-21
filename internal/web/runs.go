@@ -41,6 +41,12 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 			def.Name = def.Method + " " + def.URLTemplate
 		}
 
+		// The run uses the resolved copy; the saved definition keeps the {{base_url}} template.
+		resolved, err := store.ResolveURL(db, def)
+		if err != nil {
+			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := store.SaveRequestDefinition(db, def); err != nil {
 			http.Error(w, "save definition: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -108,7 +114,7 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 		runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
 		h := &runHandle{done: make(chan struct{}), detail: detail}
 		reg.startWithHandle(r.Context(), runID, h, func(ctx context.Context, h *runHandle) (model.Run, error) {
-			run, err := engine.RunWithPool(ctx, def, cfg, auth, pool, &h.snapshot)
+			run, err := engine.RunWithPool(ctx, resolved, cfg, auth, pool, &h.snapshot)
 			if err != nil {
 				return model.Run{}, err
 			}

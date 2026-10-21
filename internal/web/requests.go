@@ -187,6 +187,11 @@ func probeHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		def, err = store.ResolveURL(db, def)
+		if err != nil {
+			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		auth, err := store.GetGlobalAuth(db)
 		if err != nil {
 			http.Error(w, "load auth: "+err.Error(), http.StatusInternalServerError)
@@ -210,6 +215,8 @@ func requestDefFromForm(r *http.Request) (model.RequestDefinition, error) {
 		Name:        strings.TrimSpace(r.FormValue("request_name")),
 		Method:      strings.ToUpper(strings.TrimSpace(r.FormValue("method"))),
 		URLTemplate: strings.TrimSpace(r.FormValue("url")),
+
+		CollectionID: strings.TrimSpace(r.FormValue("collection_id")),
 	}
 	if def.Method == "" {
 		def.Method = "GET"
