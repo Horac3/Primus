@@ -4,15 +4,24 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Horac3/Primus/internal/model"
 	_ "modernc.org/sqlite"
 )
 
+// dsnPragmas apply to every pooled connection. busy_timeout makes a write that meets a lock wait up to 5s
+// instead of failing with SQLITE_BUSY; WAL lets readers and the single writer proceed together (D-013).
+const dsnPragmas = "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+
 // OpenDB opens (or creates) a SQLite database file at path.
 func OpenDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open("sqlite", path+sep+dsnPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}

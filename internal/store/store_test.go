@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -435,6 +436,96 @@ func TestInsightLifecycle(t *testing.T) {
 	}
 	if _, started, err := store.StartInsight(db, "run-insight", "rules", "rules-v1"); err != nil || !started {
 		t.Fatalf("StartInsight after completion started=%v err=%v, want regeneration", started, err)
+	}
+}
+
+// A write that overlaps an open read must not fail with SQLITE_BUSY.
+func TestCompleteInsight_SucceedsDuringOpenRead(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for _, id := range []string{"run-a", "run-b"} {
+		if _, _, err := store.StartInsight(db, id, "rules", "rules-v1"); err != nil {
+			t.Fatalf("StartInsight %s: %v", id, err)
+		}
+	}
+
+	// Step into a two-row result and keep the statement open, so the reader holds its lock.
+	rows, err := db.Query(`SELECT run_id FROM insights`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("expected a first row: %v", rows.Err())
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- store.CompleteInsight(db, "run-a", "rules", "rules-v1", "text") }()
+
+	// The read stays open for the whole write attempt: an unwaited write fails well inside this window.
+	var writeErr error
+	select {
+	case writeErr = <-done:
+		rows.Close()
+	case <-time.After(300 * time.Millisecond):
+		rows.Close()
+		writeErr = <-done
+	}
+	if writeErr != nil {
+		t.Fatalf("CompleteInsight with an open read: %v", writeErr)
+	}
+}
+
+// A write that meets another writer's lock must wait for it, not fail with SQLITE_BUSY.
+func TestCompleteInsight_WaitsForOtherWriter(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, _, err := store.StartInsight(db, "run-a", "rules", "rules-v1"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("BEGIN IMMEDIATE: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- store.CompleteInsight(db, "run-a", "rules", "rules-v1", "text") }()
+	time.Sleep(100 * time.Millisecond)
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		t.Fatalf("COMMIT: %v", err)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("CompleteInsight behind another writer: %v", err)
+	}
+}
+
+// A path that already carries query parameters keeps them and still gets the pragmas.
+func TestOpenDB_PathWithQueryKeepsPragmas(t *testing.T) {
+	db, err := store.OpenDB(filepath.Join(t.TempDir(), "test.db") + "?_txlock=deferred")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	var timeout int
+	if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&timeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", timeout)
 	}
 }
 

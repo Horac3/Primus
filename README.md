@@ -31,6 +31,19 @@ go run ./cmd/primus            # serve the UI on :8080, DB in ./primus.db
 go run ./cmd/primus run <config.json>   # headless CI run, exits 0/1/2
 ```
 
+## Data and backups
+
+- SQLite runs in WAL mode, so Primus keeps `primus.db-wal` and `primus.db-shm`
+  beside `primus.db`. Recent writes can live in the `-wal` file until SQLite
+  folds them back in.
+- To back up, stop Primus, then copy the whole `/data` directory (or the
+  directory holding `primus.db` without Docker). A copy taken while Primus runs
+  can catch the database and its `-wal` file at different moments, and copying
+  `primus.db` alone can miss recent writes.
+- WAL needs shared memory on a local filesystem. Bind-mounting `/data` from a
+  network share, or from a Windows or macOS host folder, can break it. Use the
+  named volume that compose creates.
+
 ## Docs
 
 - [`docs/`](docs/) — one reference file per test mode, plus global auth,

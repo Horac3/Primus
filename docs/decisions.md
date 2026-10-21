@@ -133,3 +133,24 @@ would pass silently when no assertions are set).
 Consequences: rule 3 in CLAUDE.md changes: open-loop exists, but only in rate mode. The start-anchored catch-up that
 D-011 rejected for `max_rate` is intended here: an open-loop target must try to hold its schedule.
 Revisit if: users need a tolerated drop share, or rates high enough that one scheduler goroutine cannot keep up.
+
+## D-013: SQLite waits for locks and runs in WAL mode
+Date: 2026-10-21
+Status: accepted
+Context: Step 9a. `store.OpenDB` opened SQLite with a bare path: no busy timeout and the rollback journal. A write
+that overlapped a read on another pooled connection failed at once with `SQLITE_BUSY`. The insight goroutine logged
+and dropped the error, so the insight stayed pending ("Generating...") until restart. The UI polls runs every 1s and
+insights every 2s, so the overlap happens in normal use, and `SaveRun`, `FailInsight` and every other writer share
+the exposure. The race build made it show as a 2-in-10 flake in `TestRunInsightAsyncLifecycleAndReuse`.
+Decision: `OpenDB` appends `_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)` after `?`, or after `&` when the
+path already has a query (modernc.org/sqlite applies `_pragma` on every pooled connection, `busy_timeout` first). Writes wait up to 5s for a lock, and readers no longer
+block the writer. If saving a generated insight still fails, `generateRunInsight` marks it failed instead of leaving
+it pending.
+Rejected: `SetMaxOpenConns(1)` (serializes every read behind long writes and the polling handlers; the timeout and WAL
+fix the failure without it); retrying in each writer (one setting in `OpenDB` covers them all).
+Consequences: `primus.db-wal` and `primus.db-shm` sit beside the database. To back up, stop Primus, then copy the
+whole `/data` directory: a live copy can catch the database and its `-wal` file at different moments, and
+`primus.db` alone can miss recent writes. WAL needs shared memory on a local
+filesystem, so `/data` must not be bind-mounted from a network share or a Windows or macOS host folder; use the
+compose named volume. The README "Data and backups" section says so.
+Revisit if: writes still time out under heavy load, or Primus must support `/data` on network storage.
