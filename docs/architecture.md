@@ -1,4 +1,4 @@
-<!-- mapped-at: 6e20275 2026-10-21 -->
+<!-- mapped-at: f4cb472 2026-10-21 -->
 # Architecture
 
 ## Purpose
@@ -10,10 +10,15 @@ optional LLM insights. Same engine behind an htmx UI and a headless CLI.
 ```
 cmd/primus/      main.go (flags, wiring, serve) · run.go (headless `primus run <config.json>`, exit 0/1/2)
 internal/model/  shared types: RequestDefinition, TestConfig, Assertions, Run, RunSummary, CredentialPool, LoginSpec
-internal/engine/ engine.go (dispatch loop, aggregator, verdict, Probe, applyAuth) · pool.go (login phase, per-worker tokens)
+internal/engine/ engine.go (entrypoints Run/RunWithSnapshot/RunWithPool, buildRun, Probe, applyAuth, params) ·
+                 dispatch.go (stopPredicate, feed, workers, execRequest) · rate.go (open-loop `schedule`, mode: rate) ·
+                 aggregate.go (aggregator goroutine, percentiles, histogram, series) · verdict.go (ValidateTestConfig,
+                 assertions, DetermineOutcome) · probe.go (ResolveAuth) · pool.go (login phase, per-worker tokens)
 internal/store/  store.go (SQLite open, migrate, requests/configs/runs/auth/insights) · pools.go (credential pools)
 internal/web/    web.go (routes + most handlers) · pools.go (pool panel) · registry.go (async run registry) · templates/ · static/
-internal/insight/ analyzer.go (interface, rules fallback) · insight.go (summary, findings, grounding) · ollama.go
+internal/insight/ analyzer.go (interface, rules fallback) · insight.go (summary, findings, grounding) · ollama.go ·
+                 query_filter.go (history `Filter`: Validate/Apply/Describe) · query_rules.go (rules parser) ·
+                 query_ollama.go (Ollama interpreter, 20s cap, rules fallback via `InterpretQuery`)
 internal/author/ natural-language request and test-config generation, payload pools, bounds (uses Ollama)
 internal/credential/ credential types, CSV/JSON import, extraction helpers
 internal/importer/ OpenAPI 2/3 import (secondary path)
@@ -37,7 +42,9 @@ web/             old Bob-era copy of templates/static, not used by the app (know
 SQLite tables: `requests`, `test_configs`, `runs`, `global_auth` (singleton), `insights`, `credential_pools`,
 `credentials`, `active_credential_pool` (singleton). Runs, summaries and series are stored as JSON.
 Auth is applied at dispatch by `applyAuth`; a header value `[GLOBAL]` pulls in global auth. Verdict logic lives in
-`engine.go` (`EvaluateAssertions`, `DetermineOutcome`); zero completed requests is FAILED.
+`verdict.go` (`EvaluateAssertions`, `DetermineOutcome`); zero completed requests is FAILED.
+Run history can be queried in natural language: `GET /history-fragment?q=` interprets the question into an
+`insight.Filter` (Ollama, rules fallback) and applies it to stored runs (D-014).
 
 ## Tests and tooling
 `go test ./...` uses `httptest.Server` targets and temp SQLite files (`t.TempDir()`, `store.OpenDB`, `store.Migrate`).
@@ -50,8 +57,12 @@ CI is `.github/workflows/docker-publish.yml` (workflow `CI`): a `test` job (buil
 push and PR, and a `publish` job (`needs: test`) that pushes to Docker Hub only on `main`/`master` and `v*` tags.
 
 ## Hotspots
-`internal/web/web.go` (1218 lines, most handlers) and `internal/engine/engine.go` (729 lines). History in this clone
-is shallow, so churn data is unreliable. Both files are candidates for splitting by concern once a step touches them.
+`internal/web/web.go` (1309 lines, most handlers) is still unsplit (roadmap step 14). `internal/engine/engine.go` was
+split (now 259 lines). History in this clone is shallow, so churn data is unreliable.
+
+## Planned
+`tools/` (roadmap step 11, FR-META-01..04): local commit-message assistant. Dev tooling only; must not be imported by
+`cmd/primus` or copied into the image. Not created yet.
 
 ## Known debt and contradictions
 - `AGENTS.md`, `.bobignore`, `primus-scaffold-plan.md` and the root `web/` directory are Bob-era leftovers.

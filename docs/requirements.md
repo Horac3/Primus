@@ -69,3 +69,22 @@ Only planned work is written up here. Shipped behaviour is documented in the pub
   - Edge: a blank question keeps the plain history list.
 - **NFR-HIST-05** — Only the question, today's date and the filter schema go to the model: no run data, URLs, config or
   request names, bodies or credentials.
+
+## Commit-message assistant (META) — developer tooling, not a product feature
+Lives under `tools/`. Local Ollama only; never a hosted model.
+- **FR-META-01** — Generate from the staged diff: the tool reads `git diff --cached` and prints a draft commit message
+  (subject, body bullets, `Tests:` line) for the maintainer to review. It never runs `git commit` or changes the index.
+  - Given staged changes under `internal/engine`, then the draft's scope is `engine`.
+  - Edge: an empty staged diff exits non-zero with a message and calls no model.
+  - Edge: a diff larger than the model input cap is reduced to file names, stat counts and truncated hunks, and the
+    output says it was truncated.
+- **FR-META-02** — Format validation: a draft is accepted only if it matches the project's Conventional Commits format
+  from `CLAUDE.md`: `type(scope): subject` with a scope from the allowed list (`engine`, `model`, `store`, `web`, `ui`,
+  `insight`, `author`, `auth`, `importer`, `cli`, `docs`, `docker`, `ci`), bulleted body, final `Tests:` line. An invalid
+  draft is never printed as if valid.
+- **FR-META-03** — Fallback: with Ollama absent, failing, slower than a time cap or returning an invalid draft, a
+  rules-based draft is built from the staged paths (scope from the path, type from the change kind) and the output says
+  which generator ran (`ollama` or `rules`).
+- **FR-META-04** — Excluded from the binary and image: nothing under `tools/` is imported by `cmd/primus` or
+  `internal/...`, and `deploy/Dockerfile` does not copy it into the final image.
+  - Given `go list -deps ./cmd/primus`, then no `tools/` package appears.

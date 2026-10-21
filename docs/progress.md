@@ -27,26 +27,26 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 9a. Fix: SQLite busy errors drop writes. `OpenDB` has no busy timeout or WAL, so a write that overlaps a read
   fails with `SQLITE_BUSY`; a dropped `CompleteInsight` leaves the insight stuck on "Generating...". D-013.
 - [x] 10. LLM: query run history in natural language (FR-HIST-01..04, NFR-HIST-05, D-014).
-- [ ] 11. LLM: commit-message assistant ("meta"). Needs requirements and a spec first.
 - [ ] 12. Downloadable test reports and insights. Needs scoping.
 - [ ] 13. Credential provisioning (sign-up before the run). Later and advanced; reuses the `Extraction` primitive.
   Needs scoping and a `/decide`.
 - [ ] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. Do it as the first
   commit of whichever step next touches each file, not as a standalone big-bang change.
+- [ ] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
+  fallback, not in the binary or image. FR-META-01..04. Requirements written; not planned yet.
 
 ## Current step
-Step 11: LLM: commit-message assistant ("meta")
-Requirements: none yet (needs requirements and a spec first)
-Status: not started
+Step 12: Downloadable test reports and insights
+Requirements: none yet (needs scoping)
+Status: not started (step 11 "meta" is deliberately last; its requirements FR-META-01..04 are written)
 
 ## Handoff notes
-- Done: step 10. `insight.Filter` (Validate/Apply/Describe), `RulesInterpreter`, `OllamaInterpreter` + `InterpretQuery`
-  (20s cap, rules fallback); `GET /history-fragment?q=` and the Ask form; public page `docs/history.md`. Tests:
-  `TestFilterValidate*`, `TestFilterApply`, `TestFilterDescribe`, `TestRulesInterpreterParse*`,
-  `TestOllamaInterpreter*`, `TestInterpretQuery*`, `TestHistoryQuery*`, `TestIndexHasHistoryQueryForm`. Race clean.
-- Next action: step 11 needs requirements and a spec before planning; ask the user for scope.
-- Uncommitted: none.
-- Decisions: D-014 (logged).
+- Done (docs only, no code): wrote FR-META-01..04 in `docs/requirements.md` (dev tooling under `tools/`, Ollama only,
+  Conventional Commits validation, rules fallback, excluded from binary and image); moved step 11 to the end of the
+  roadmap (number kept); ran a manual remap of `docs/architecture.md` (no `/remap` skill exists in this repo).
+- Next action: step 12 needs scoping with the user before planning. Step 11 is not to be planned yet.
+- Uncommitted: `docs/requirements.md`, `docs/progress.md`, `docs/architecture.md`.
+- Decisions: step 11 is developer tooling, not a product feature; Ollama only, never built into `cmd/primus` or the image.
 - Watch out: ui-checker had no Playwright, so the Ask form was checked from HTML/CSS only (no screenshots). The
   "not understood" note shows beside "No runs match" on an empty DB (left as is). Global button contrast ~3.9:1
   (pre-existing). Never put `python`/`python3` in Bash here: the Windows Store alias hangs the shell.
@@ -55,7 +55,6 @@ Status: not started
   `internal/importer/importer.go`, `importer_test.go`, `internal/web/registry.go`, `registry_test.go`.
   No `ui-checker` screenshot of the rate fields yet. Rate docs live in `docs/load.md` (docs_test pins the page list).
 - Step 14 partly done: engine.go split (b023f67); web.go split still pending.
-- Run /remap: engine.go split into dispatch.go, aggregate.go, verdict.go; new rate.go.
 - Manual steps the user does by hand, never Claude: `git filter-repo`, interactive rebase, compose `depends_on`,
   Docker Hub push, deleting `AGENTS.md`/`.bobignore`/`primus-scaffold-plan.md`/root `web/`, repo-wide `eol` rule.
 
@@ -71,3 +70,4 @@ Status: not started
 - 2026-10-21 step 9 done (`855d841`)
 - 2026-10-21 step 9a done (`e4ab16c`, `855d841`)
 - 2026-10-21 step 10 done (`6d93009`..`3304a33`)
+- 2026-10-21 step 11 requirements written, step moved last, architecture remapped (uncommitted)
