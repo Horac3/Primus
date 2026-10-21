@@ -210,9 +210,22 @@ const (
 	DefaultLoginConcurrency = 20
 )
 
-// CredentialPool is a named set of pre-existing accounts plus how to log
-// each one in and how to send the resulting token. Primus never creates
-// accounts on the target.
+// ProvisionSpec describes a user-started sign-up action (D-016): Count
+// accounts are created on the target, one request each. Fields are row
+// templates ({{seq}} and {{secret}} are generated per account); Signup is
+// rendered from the finished row. If ExtractField is set, Signup.Extraction
+// saves that value from the response into the row.
+type ProvisionSpec struct {
+	Count        int               `json:"count"`
+	Fields       map[string]string `json:"fields"`
+	Signup       LoginSpec         `json:"signup"`
+	ExtractField string            `json:"extract_field,omitempty"`
+	Concurrency  int               `json:"concurrency,omitempty"`
+}
+
+// CredentialPool is a named set of accounts plus how to log each one in and
+// how to send the resulting token. Accounts exist before a run; Primus only
+// creates them through an explicit ProvisionSpec the user starts (D-016).
 type CredentialPool struct {
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`

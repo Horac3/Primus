@@ -235,25 +235,40 @@ func (p *poolLogins) authFor(token string) model.AuthConfig {
 // login sends credential idx's login request. The outcome's ErrorClass is
 // a short, value-free reason suitable for the run report.
 func (p *poolLogins) login(ctx context.Context, idx int) (model.LoginOutcome, string) {
-	out := model.LoginOutcome{Index: idx}
 	if idx < 0 || idx >= len(p.pool.Credentials) {
-		out.ErrorClass = "no such credential"
+		return model.LoginOutcome{Index: idx, ErrorClass: "no such credential"}, ""
+	}
+	spec := p.pool.Login
+	out, resp := sendSpec(ctx, p.client, spec, p.pool.Credentials[idx])
+	out.Index = idx
+	if !out.Success {
 		return out, ""
 	}
-	cred := p.pool.Credentials[idx]
-	spec := p.pool.Login
+	token, err := credential.Extract(resp, spec.Extraction)
+	if err != nil {
+		out.Success = false
+		out.ErrorClass = "token not found: " + err.Error()
+		return out, ""
+	}
+	return out, token
+}
 
+// sendSpec renders spec from cred, sends it, and reports the outcome. On
+// success (a 2xx response) it also returns the response for extraction.
+// ErrorClass is short and value-free; it never embeds the rendered URL.
+func sendSpec(ctx context.Context, client *http.Client, spec model.LoginSpec, cred model.Credential) (model.LoginOutcome, credential.Response) {
+	var out model.LoginOutcome
 	url, err := credential.Render(spec.URL, cred)
 	if err != nil {
 		out.ErrorClass = err.Error()
-		return out, ""
+		return out, credential.Response{}
 	}
 	headers := make(http.Header, len(spec.Headers))
 	for name, tmpl := range spec.Headers {
 		value, err := credential.Render(tmpl, cred)
 		if err != nil {
 			out.ErrorClass = err.Error()
-			return out, ""
+			return out, credential.Response{}
 		}
 		headers.Set(name, value)
 	}
@@ -262,7 +277,7 @@ func (p *poolLogins) login(ctx context.Context, idx int) (model.LoginOutcome, st
 		rendered, err := credential.RenderBody(spec.Body, cred, headers.Get("Content-Type"))
 		if err != nil {
 			out.ErrorClass = err.Error()
-			return out, ""
+			return out, credential.Response{}
 		}
 		body = strings.NewReader(rendered)
 	}
@@ -276,16 +291,16 @@ func (p *poolLogins) login(ctx context.Context, idx int) (model.LoginOutcome, st
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		out.ErrorClass = "invalid login request"
-		return out, ""
+		return out, credential.Response{}
 	}
 	req.Header = headers
 
 	start := time.Now()
-	resp, err := p.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		out.Latency = time.Since(start)
 		out.ErrorClass = classifyLoginError(ctx, err)
-		return out, ""
+		return out, credential.Response{}
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxLoginBody))
@@ -293,19 +308,14 @@ func (p *poolLogins) login(ctx context.Context, idx int) (model.LoginOutcome, st
 	out.StatusCode = resp.StatusCode
 	if err != nil {
 		out.ErrorClass = classifyLoginError(ctx, err)
-		return out, ""
+		return out, credential.Response{}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		out.ErrorClass = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		return out, ""
-	}
-	token, err := credential.Extract(credential.Response{Header: resp.Header, Body: respBody}, spec.Extraction)
-	if err != nil {
-		out.ErrorClass = "token not found: " + err.Error()
-		return out, ""
+		return out, credential.Response{}
 	}
 	out.Success = true
-	return out, token
+	return out, credential.Response{Header: resp.Header, Body: respBody}
 }
 
 // classifyLoginError reduces a transport error to a short reason. Raw
