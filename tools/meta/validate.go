@@ -53,9 +53,12 @@ func Validate(msg string) error {
 	if !strings.HasPrefix(lines[last], "Tests:") {
 		return errors.New("the last line must start with \"Tests:\"")
 	}
+	if strings.TrimSpace(strings.TrimPrefix(lines[last], "Tests:")) == "" {
+		return errors.New("the \"Tests:\" line must say what the tests cover")
+	}
 	bullets := 0
 	for _, line := range lines[2:last] {
-		if strings.HasPrefix(line, "- ") {
+		if strings.HasPrefix(line, "- ") && strings.TrimSpace(line[2:]) != "" {
 			bullets++
 		}
 	}

@@ -20,7 +20,7 @@ type Git interface {
 type RealGit struct{ Dir string }
 
 func (g RealGit) StagedDiff(ctx context.Context) (string, error) {
-	return g.output(ctx, "diff", "--cached", "--no-renames", "--no-color", "--no-ext-diff")
+	return g.output(ctx, "diff", "--cached", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv")
 }
 
 func (g RealGit) Changes(ctx context.Context) ([]FileChange, error) {

@@ -20,6 +20,7 @@ and whether the diff was truncated.
 | `--model` | `PRIMUS_LLM_MODEL` | empty (rules generator) |
 | `--timeout` | | `30s` |
 | `--max-bytes` | | `24000` (diff size sent to the model) |
+| `--allow-remote` | | off; a non-loopback `--url` is refused (exit 2) because the staged diff would leave this machine |
 
 The model is local Ollama only. A draft that fails the format check, a model that is absent, failing or slow all
 fall back to the rules generator, which builds the message from the staged paths. Exit codes: `0` draft printed,

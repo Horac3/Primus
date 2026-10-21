@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
@@ -116,11 +117,13 @@ func TestRun_FallsBackToRules(t *testing.T) {
 		url  string
 		args []string
 	}{
-		{"ollama absent", closedURL, nil},
+		{"ollama absent", closedURL, []string{"--timeout", "500ms"}},
 		{"server error", failing.URL, nil},
 		{"slower than the time cap", slow.URL, []string{"--timeout", "100ms"}},
 		{"not json", ollamaServer(t, "just some prose", &hits, nil).URL, nil},
 		{"unknown scope", ollamaServer(t, strings.Replace(goodModelJSON, `"engine"`, `"nope"`, 1), &hits, nil).URL, nil},
+		{"empty bullet", ollamaServer(t, `{"type":"feat","scope":"engine","subject":"add thing","bullets":[""],"tests":"x"}`, &hits, nil).URL, nil},
+		{"empty tests", ollamaServer(t, `{"type":"feat","scope":"engine","subject":"add thing","bullets":["a"],"tests":""}`, &hits, nil).URL, nil},
 		{"no bullets", ollamaServer(t, `{"type":"feat","scope":"engine","subject":"add thing","bullets":[],"tests":"x"}`, &hits, nil).URL, nil},
 	}
 	for _, tt := range tests {
@@ -212,6 +215,35 @@ func TestRun_UnknownFlagExitsTwo(t *testing.T) {
 	}
 }
 
+func TestRun_RefusesNonLocalURLWithoutAllowRemote(t *testing.T) {
+	for _, url := range []string{"http://example.com:11434", "https://10.1.2.3"} {
+		code, stdout, stderr := runMeta(t, engineGit, "--url", url, "--model", "tiny")
+		if code != 2 {
+			t.Errorf("%s: exit = %d, want 2", url, code)
+		}
+		if stdout != "" || !strings.Contains(stderr, "allow-remote") {
+			t.Errorf("%s: stdout = %q, stderr = %q, want nothing printed and an allow-remote hint", url, stdout, stderr)
+		}
+	}
+}
+
+func TestRun_AcceptsLoopbackHosts(t *testing.T) {
+	for _, url := range []string{"http://localhost:1", "http://127.0.0.1:1", "http://[::1]:1"} {
+		code, _, stderr := runMeta(t, engineGit, "--url", url, "--model", "tiny", "--timeout", "500ms")
+		if code != 0 || !strings.Contains(stderr, "generator: rules") {
+			t.Errorf("%s: exit = %d, stderr = %q, want a rules fallback", url, code, stderr)
+		}
+	}
+}
+
+func TestRun_RejectsNonPositiveLimits(t *testing.T) {
+	for _, args := range [][]string{{"--max-bytes", "0"}, {"--max-bytes", "-1"}, {"--timeout", "0s"}} {
+		if code, _, _ := runMeta(t, engineGit, args...); code != 2 {
+			t.Errorf("%v: exit = %d, want 2", args, code)
+		}
+	}
+}
+
 func TestRun_EnvSuppliesModelAndURL(t *testing.T) {
 	var hits atomic.Int32
 	srv := ollamaServer(t, goodModelJSON, &hits, nil)
@@ -231,8 +263,14 @@ func TestRealGit_ReadsStagedChangesWithoutChangingTheIndex(t *testing.T) {
 	dir := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "core.autocrlf=false"}, args...)...)
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-c", "core.hooksPath="}, args...)...)
 		cmd.Dir = dir
+		// A GIT_DIR or GIT_INDEX_FILE inherited from a hook would point at the real repository.
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "GIT_") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)

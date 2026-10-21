@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -27,11 +29,20 @@ func main() {
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, git Git) int {
 	fs := flag.NewFlagSet("meta", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	url := fs.String("url", orDefault(getenv("PRIMUS_LLM_URL"), defaultURL), "Ollama base URL")
+	llmURL := fs.String("url", orDefault(getenv("PRIMUS_LLM_URL"), defaultURL), "Ollama base URL")
 	model := fs.String("model", getenv("PRIMUS_LLM_MODEL"), "Ollama model; empty uses the rules generator")
 	timeout := fs.Duration("timeout", defaultTimeout, "time cap for the Ollama call")
 	maxBytes := fs.Int("max-bytes", defaultMaxBytes, "diff size cap sent to the model")
+	allowRemote := fs.Bool("allow-remote", false, "allow a non-loopback Ollama URL (the staged diff is sent there)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *timeout <= 0 || *maxBytes <= 0 {
+		fmt.Fprintln(stderr, "error: --timeout and --max-bytes must be positive")
+		return 2
+	}
+	if *model != "" && !*allowRemote && !isLoopbackURL(*llmURL) {
+		fmt.Fprintf(stderr, "error: %s is not a local address; the staged diff would leave this machine (pass --allow-remote to override)\n", *llmURL)
 		return 2
 	}
 
@@ -56,7 +67,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if truncated {
 			fmt.Fprintf(stderr, "note: diff truncated to %d bytes for the model\n", *maxBytes)
 		}
-		gen := OllamaGenerator{URL: *url, Model: *model, Client: &http.Client{Timeout: *timeout}}
+		gen := OllamaGenerator{URL: *llmURL, Model: *model, Client: &http.Client{Timeout: *timeout}}
 		draft, err = gen.Generate(ctx, modelDiff, changes)
 		if err == nil {
 			err = Validate(draft)
@@ -72,6 +83,20 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	fmt.Fprintf(stderr, "generator: rules (%s)\n", reason)
 	fmt.Fprintln(stdout, RulesDraft(changes))
 	return 0
+}
+
+// isLoopbackURL reports whether rawURL points at this machine.
+func isLoopbackURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func orDefault(value, fallback string) string {

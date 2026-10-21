@@ -38,6 +38,8 @@ func TestValidate_RejectsViolations(t *testing.T) {
 		{"no blank line after header", "feat(engine): add thing\n- a\n\nTests: x", "blank"},
 		{"no bullets", "feat(engine): add thing\n\nplain prose\n\nTests: x", "bullet"},
 		{"no tests line", "feat(engine): add thing\n\n- a", "Tests:"},
+		{"empty bullet", "feat(engine): add thing\n\n- \n\nTests: x", "bullet"},
+		{"empty tests line", "feat(engine): add thing\n\n- a\n\nTests:  ", "Tests:"},
 		{"tests line not last", "feat(engine): add thing\n\n- a\n\nTests: x\n- b", "Tests:"},
 	}
 	for _, tt := range tests {

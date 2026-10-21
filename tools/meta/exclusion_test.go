@@ -21,7 +21,7 @@ func TestBinaryDoesNotDependOnTools(t *testing.T) {
 		t.Fatalf("go list -deps ./cmd/primus: %v", err)
 	}
 	for _, pkg := range strings.Fields(string(out)) {
-		if strings.Contains(pkg, "/tools/") || strings.HasSuffix(pkg, "/tools") {
+		if pkg == "github.com/Horac3/Primus/tools" || strings.HasPrefix(pkg, "github.com/Horac3/Primus/tools/") {
 			t.Errorf("cmd/primus depends on %s", pkg)
 		}
 	}
