@@ -83,3 +83,10 @@ not change across the restart that migrates it.
 Consequences: `GetCredentialPoolMasked` is the masked read; `GetCredentialPoolWithSecrets` stays the engine's only
 unmasked read. Concurrent spec and masking saves each rewrite the whole payload, so one can undo the other (single user;
 deferred).
+
+## D-010: Compose defaults the analyzer to rules
+Context: compose set `PRIMUS_ANALYZER=ollama` unconditionally, so without the `ai` profile insights started labelled
+ollama then fell back, and authoring was shown but returned 502.
+Decision: `PRIMUS_ANALYZER: ${PRIMUS_ANALYZER:-rules}`. AI needs `PRIMUS_ANALYZER=ollama` plus `--profile ai`.
+Rejected: a startup reachability probe (no `depends_on`, so a slow Ollama would stay disabled until restart).
+Consequences: no code change; `NewAnalyzer` still does no reachability check.
