@@ -27,8 +27,10 @@ Only planned work is written up here. Shipped behaviour is documented in the pub
 - **FR-PROBE-02** — An auth-probe run takes an optional `max_rate` (attempts per second) that caps how fast attempts
   are released. It is a ceiling, not a target: the reached rate is ≤ `max_rate` and ≤ concurrency/latency.
   - Given `max_rate` 20 and 6 attempts, when the run completes, then it took at least 250ms (5 intervals of 50ms).
-  - Edge: 0 or empty means no cap. Negative, or set for any other mode, is rejected. Stop during a wait ends the run
-    promptly.
+  - Given a target that stalls both workers, when they free up, then consecutive attempts still go out at least
+    1/`max_rate` apart (no catch-up burst).
+  - Edge: 0 or empty means no cap. Negative, below 0.001, combined with a burst pattern, or set for any other mode,
+    is rejected. Stop during a wait ends the run promptly.
 - **FR-PROBE-03** — A run takes an optional `auth_source`: empty (an active pool, else global auth: unchanged),
   `global` (global auth even when a pool is active), `pool` (requires a pool) or `none` (no auth at all).
   - Given `auth_source` `none` and a header set to `[GLOBAL]`, when the run fires, then the target sees no auth header.

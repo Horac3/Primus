@@ -21,6 +21,10 @@ primus run <config.json> [--db <path>]
   global auth. The output then includes a `login` report (counts, login
   latency, failure classes; never credentials or tokens), and a run where
   no login succeeds exits `1` with outcome `fail_no_logins`.
+- `auth_source` (optional) — `global`, `pool` or `none` picks the identity;
+  empty keeps the rule above. `pool` without `credential_pool_id` exits `2`.
+  For `auth_probe` runs, `max_rate` caps attempts per second. See
+  [auth-probe](auth-probe.md).
 
 ## Exit codes
 

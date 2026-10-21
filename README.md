@@ -12,7 +12,7 @@ Test modes, one line each:
 - **load** — steady traffic: N workers firing requests for a fixed count or a fixed duration.
 - **burst** — pulsed traffic: requests released in bursts with idle gaps, for recovery testing.
 - **soak** — duration-only steady traffic, for catching slow degradation over minutes.
-- **auth-probe** — repeated credentialed requests, for rate-limit/lockout behavior (basic support today, see roadmap below).
+- **auth-probe** — repeated credentialed requests, for rate-limit/lockout behavior (attempt count, max attempts/sec and the identity to send as).
 
 ## Quickstart
 
@@ -41,8 +41,6 @@ go run ./cmd/primus run <config.json>   # headless CI run, exits 0/1/2
 
 ## What's next (roadmap, not bugs)
 
-- **Auth-probe UI wiring**: the mode exists and runs, but dedicated
-  attempt-count/rate/credential fields are not in the UI yet.
 - **True multi-hour soak**: soak is demo-scale today (seconds-to-minutes)
   with no trend graphing across runs.
 

@@ -96,11 +96,15 @@ Date: 2026-10-21
 Status: accepted
 Context: Step 8 wires attempts, rate and credentials into the auth-probe UI. FR-PROBE-01..04. Rule 3 says there is
 no open-loop fixed req/s mode yet (step 9 owns it).
-Decision: `TestConfig.MaxRate` (`max_rate`, attempts/sec) is a ceiling: `feed` releases the n-th attempt no earlier
-than `start + n/max_rate`. The rate actually reached is ≤ `max_rate` and ≤ concurrency/latency. It is accepted for
-`auth_probe` only. `TestConfig.AuthSource` (`auth_source`: empty | `global` | `pool` | `none`) picks the identity.
+Decision: `TestConfig.MaxRate` (`max_rate`, attempts/sec) is a ceiling: `feed` releases each attempt at least
+`1/max_rate` after the previous one was taken by a worker, over an unbuffered jobs channel. A slow stretch therefore
+never turns into a catch-up burst that a sliding-window limiter would see. The rate actually reached is ≤ `max_rate`
+and ≤ concurrency/latency. It is accepted for `auth_probe` only, from 0.001 up (smaller would overflow the
+interval), and not together with a `burst_pattern`. A run's identity follows `auth_source`, and the running line
+names it from the resolved auth (pool, global auth, or no auth). `TestConfig.AuthSource` (`auth_source`: empty | `global` | `pool` | `none`) picks the identity.
 `engine.ResolveAuth` turns it into the `(AuthConfig, *CredentialPool)` that `RunWithPool` already takes, for the
 web handler and the CLI alike. `applyAuth` stays the only dispatch path.
-Rejected: a per-worker delay (the overall rate would depend on concurrency); username/password fields in the probe
-body (a second place to store and mask secrets).
+Rejected: a per-worker delay (the overall rate would depend on concurrency); a schedule anchored to the start
+(`start + n/max_rate`), which bursts after a stall; username/password fields in the probe body (a second place to
+store and mask secrets).
 Consequences: step 9's open-loop mode is separate and must not reuse `max_rate` as its target rate.
