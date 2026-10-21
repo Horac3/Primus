@@ -52,8 +52,8 @@ func validateTargetRate(cfg model.TestConfig) error {
 		}
 		return nil
 	}
-	if !(cfg.TargetRate > 0) || math.IsInf(cfg.TargetRate, 0) {
-		return fmt.Errorf("target_rate must be a finite number > 0 (got %g)", cfg.TargetRate)
+	if !(cfg.TargetRate >= MinTargetRate) || math.IsInf(cfg.TargetRate, 0) {
+		return fmt.Errorf("target_rate must be a finite number >= %g (got %g)", MinTargetRate, cfg.TargetRate)
 	}
 	if cfg.Duration <= 0 {
 		return fmt.Errorf("rate mode needs a duration, not total_requests")

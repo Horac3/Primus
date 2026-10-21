@@ -40,6 +40,8 @@ func TestValidateTestConfig_TargetRate(t *testing.T) {
 		{"negative target", func(c *model.TestConfig) { c.TargetRate = -5 }, "target_rate"},
 		{"NaN target", func(c *model.TestConfig) { c.TargetRate = math.NaN() }, "target_rate"},
 		{"infinite target", func(c *model.TestConfig) { c.TargetRate = math.Inf(1) }, "target_rate"},
+		{"below minimum", func(c *model.TestConfig) { c.TargetRate = 1e-12 }, "target_rate"},
+		{"smallest target", func(c *model.TestConfig) { c.TargetRate = engine.MinTargetRate }, ""},
 		{"count instead of duration", func(c *model.TestConfig) { c.Duration = 0; c.TotalRequests = 100 }, "duration"},
 		{"target in load mode", func(c *model.TestConfig) { c.Mode = model.ModeLoad }, "target_rate"},
 		{"with max_rate", func(c *model.TestConfig) { c.MaxRate = 5 }, "max_rate"},
@@ -218,5 +220,49 @@ func TestRunRate_Stop_ReturnsPromptlyAndCancelsInFlight(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return within 3s of Stop")
+	}
+}
+
+// With a pool, workers whose login failed are left out, so the in-flight
+// cap is the workers that remain: extra due requests are dropped, never
+// queued behind a busy worker.
+func TestRunRate_PoolWithFailedLogins_CapIsTheWorkersLeft(t *testing.T) {
+	// Arrange: 4 slots asked for, 1 login succeeds, 200ms responses.
+	f := newAuthFixture(t, 4)
+	f.meDelay = 200 * time.Millisecond
+	pool := f.pool(4, 1, 2, 3)
+	cfg := rateConfig(50, 4, 500*time.Millisecond)
+
+	// Act
+	run, err := engine.RunWithPool(context.Background(), f.meRequest(), cfg, model.AuthConfig{}, &pool, nil)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("RunWithPool: %v", err)
+	}
+	if run.Summary.Dropped == 0 {
+		t.Error("Dropped = 0, want the requests one worker could not take")
+	}
+	if p99 := run.Summary.P99Millis; p99 > 350 {
+		t.Errorf("p99 = %dms, want ~200ms: due requests were queued instead of dropped", p99)
+	}
+}
+
+// Achieved rate is measured over the whole schedule window, not up to the
+// last due time: 2/s for 1s releases at 0 and 500ms and is 2/s.
+func TestRunRate_AchievedRateCoversTheWholeWindow(t *testing.T) {
+	// Arrange
+	target := newSlowTarget(t, 0)
+	cfg := rateConfig(2, 5, time.Second)
+
+	// Act
+	run, err := engine.Run(context.Background(), target.request(), cfg, model.AuthConfig{})
+
+	// Assert
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := run.Summary.AchievedRate; got < 1.8 || got > 2.2 {
+		t.Errorf("AchievedRate = %g, want ~2", got)
 	}
 }

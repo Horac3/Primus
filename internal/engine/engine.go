@@ -197,14 +197,20 @@ func RunWithPool(ctx context.Context, req model.RequestDefinition, cfg model.Tes
 	var dropped int
 	var scheduled time.Duration
 	if cfg.Mode == model.ModeRate {
-		// Concurrency caps the requests in flight: each holds a slot from
-		// release until its result is delivered.
-		slots := make(chan struct{}, cfg.Concurrency)
-		jobs := make(chan time.Time, cfg.Concurrency)
+		// The workers left after logins cap the requests in flight: each
+		// holds a slot from release until its result is delivered. Sizing
+		// by cfg.Concurrency would queue jobs when some logins failed.
+		slots := make(chan struct{}, len(workers))
+		jobs := make(chan time.Time, len(workers))
 		go func() {
 			defer close(feedDone)
 			dropped = schedule(runCtx, jobs, slots, cfg.TargetRate, startedAt, startedAt.Add(cfg.Duration))
-			scheduled = time.Since(startedAt)
+			// The window is the whole duration unless the run was cut
+			// short; schedule itself returns at the last due time.
+			scheduled = cfg.Duration
+			if runCtx.Err() != nil {
+				scheduled = min(time.Since(startedAt), cfg.Duration)
+			}
 		}()
 		runScheduledWorkers(runCtx, req, workers, cfg.PayloadPool, jobs, slots, results, client)
 	} else {
