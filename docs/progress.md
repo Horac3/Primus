@@ -28,16 +28,16 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   fails with `SQLITE_BUSY`; a dropped `CompleteInsight` leaves the insight stuck on "Generating...". D-013.
 - [x] 10. LLM: query run history in natural language (FR-HIST-01..04, NFR-HIST-05, D-014).
 - [x] 12. Downloadable test reports and insights (FR-REPORT-01..05, D-015).
-- [~] 13. Credential provisioning (FR-PROV-01..07, D-016). Built, reviewed and committed; only `scripts/race.sh` is outstanding.
+- [x] 13. Credential provisioning (FR-PROV-01..07, D-016). Built, reviewed, committed; `scripts/race.sh` green. (`cd8f22d`..`bd616d5`)
 - [ ] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. Do it as the first
   commit of whichever step next touches each file, not as a standalone big-bang change.
 - [ ] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
   fallback, not in the binary or image. FR-META-01..04. Requirements written; not planned yet.
 
 ## Current step
-Step 13: Credential provisioning (sign-up before the run)
-Requirements: FR-PROV-01..07
-Status: in progress — all behaviours done and committed; race run pending (Docker was down)
+Step 14: Refactor: split `internal/web/web.go` by concern (engine.go split already done in b023f67)
+Requirements: none (pure refactor, no behaviour change)
+Status: in progress — engine.go done, web.go pending
 
 ## Handoff notes
 - Done (step 13, D-016 accepted, FR-PROV-01..07 written): `engine.Provision`/`GenerateSecret` (`internal/engine/provision.go`),
@@ -45,8 +45,8 @@ Status: in progress — all behaviours done and committed; race run pending (Doc
   `internal/web/provision.go` (POST /pools/provision, GET .../{id}/status, POST .../{id}/stop, one job per pool, concurrency
   capped at the pool's login concurrency), panel form in `pools-panel.html`, docs in `docs/credential-pools.md`. Tests:
   `TestProvision_*` (engine and web), `TestGenerateSecret`, `TestAppendCredentials_*`. Concurrency and general reviews done and fixed.
-- Next action: run `scripts/race.sh` once Docker Desktop is up (it was down all session; step stays `[~]` until it is green).
-  Fix anything it reports in `registry.go` (a sweep race is already fixed in 1652c25) or `provision.go`, then mark step 13 `[x]`.
+- Race run: `scripts/race.sh` green on all packages (2026-10-21), step 13 closed.
+- Next action: step 14, split `internal/web/web.go` by concern (handlers per area), no behaviour change; tests stay untouched.
 - Uncommitted: `docs/progress.md` until the handoff commit.
 - Decisions: none beyond D-016 (rule 7 in CLAUDE.md and D-004 already updated).
 - Not done / known: Stop can leave an in-flight sign-up created on the target but unsaved (documented in the docs page);
@@ -75,3 +75,4 @@ Status: in progress — all behaviours done and committed; race run pending (Doc
 - 2026-10-21 step 11 requirements written, step moved last, architecture remapped (`3ed6303`)
 - 2026-10-21 step 12 done (`a39cfc6`..`9702601`)
 - 2026-10-21 step 13 partial (`cd8f22d`..`bd616d5`; race run pending)
+- 2026-10-21 step 13 done (race.sh green; `cd8f22d`..`bd616d5`)
