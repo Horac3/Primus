@@ -327,17 +327,25 @@ func classifyLoginError(ctx context.Context, err error) string {
 // summary reports the login phase plus any re-logins. Call it only after
 // every worker has exited.
 func (p *poolLogins) summary() *model.LoginSummary {
+	s := summarizeOutcomes(p.outcomes)
+	s.PoolID = p.pool.ID
+	s.PoolName = p.pool.Name
+	s.Relogins = int(p.relogins.Load())
+	s.ReloginsSucceeded = int(p.reloginsOK.Load())
+	return s
+}
+
+// summarizeOutcomes counts outcomes into a LoginSummary: succeeded,
+// cancelled (never failed), failed with value-free reasons, and latency
+// percentiles. Pool identity and re-login counters are left to the caller.
+func summarizeOutcomes(outcomes []model.LoginOutcome) *model.LoginSummary {
 	s := &model.LoginSummary{
-		PoolID:            p.pool.ID,
-		PoolName:          p.pool.Name,
-		Attempted:         len(p.outcomes),
-		Relogins:          int(p.relogins.Load()),
-		ReloginsSucceeded: int(p.reloginsOK.Load()),
-		Outcomes:          append([]model.LoginOutcome(nil), p.outcomes...),
+		Attempted: len(outcomes),
+		Outcomes:  append([]model.LoginOutcome(nil), outcomes...),
 	}
 	reasons := make(map[string]int)
 	var latencies []int
-	for _, o := range p.outcomes {
+	for _, o := range outcomes {
 		switch {
 		case o.Success:
 			s.Succeeded++
