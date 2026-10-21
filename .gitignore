@@ -10,6 +10,7 @@ tmp/
 # Environment files
 .env
 *.env
+!.claude/kit/commands.env
 
 # Node (should never appear, but just in case)
 node_modules/
