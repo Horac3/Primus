@@ -84,7 +84,7 @@
     <form hx-post="/pools/provision" hx-target="#pool-panel" hx-swap="innerHTML">
       <p class="muted">Sends one sign-up request per account, then saves the ones that succeed (HTTP 2xx) into a pool.
         Accounts stay on the target: Primus cannot delete them, verify emails or solve captchas.
-        Only run this against a system you may create test accounts on.</p>
+        <strong>Only run this against a system you may create test accounts on.</strong></p>
       <div class="row">
         <label><span>Add to pool</span>
           <select name="existing_pool_id">
@@ -95,9 +95,10 @@
         <label style="flex:0 0 110px"><span>Accounts</span><input type="number" min="1" name="count" value="10" required></label>
         <label style="flex:0 0 140px"><span>Concurrency</span><input type="number" min="1" name="concurrency" value="5"></label>
       </div>
-      <label><span>Account fields, one per line (generated: {{"{{seq}}"}} 1, 2, 3… and {{"{{secret}}"}} a random password)</span>
+      <label><span>Account fields, one per line</span>
         <textarea name="fields" rows="3">{{"email=user{{seq}}@example.test"}}
 {{"password={{secret}}"}}</textarea></label>
+      <p class="muted">Generated for each account: {{"{{seq}}"}} counts 1, 2, 3… and {{"{{secret}}"}} is a random password.</p>
       <div class="row">
         <label style="flex:0 0 100px"><span>Method</span><input type="text" name="signup_method" value="POST"></label>
         <label><span>Sign-up URL</span><input type="url" name="signup_url" placeholder="https://api.example.com/auth/register" required></label>
