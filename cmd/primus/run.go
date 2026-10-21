@@ -45,6 +45,12 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		fmt.Fprintf(os.Stderr, "primus run: request %q not found in DB: %v\n", cfg.RequestID, err)
 		return 2
 	}
+	// {{base_url}} resolves from the endpoint's collection, as in the web handler.
+	reqDef, err = store.ResolveURL(db, reqDef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "primus run: request %q: %v\n", cfg.RequestID, err)
+		return 2
+	}
 
 	// Global auth, applied to every dispatched request.
 	auth, err := store.GetGlobalAuth(db)
