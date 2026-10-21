@@ -26,7 +26,7 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   (ticker-driven release, in-flight cap, `Dropped` accounting, latency from intended send time).
 - [x] 9a. Fix: SQLite busy errors drop writes. `OpenDB` has no busy timeout or WAL, so a write that overlaps a read
   fails with `SQLITE_BUSY`; a dropped `CompleteInsight` leaves the insight stuck on "Generating...". D-013.
-- [ ] 10. LLM: query run history in natural language. Needs requirements and a spec first.
+- [x] 10. LLM: query run history in natural language (FR-HIST-01..04, NFR-HIST-05, D-014).
 - [ ] 11. LLM: commit-message assistant ("meta"). Needs requirements and a spec first.
 - [ ] 12. Downloadable test reports and insights. Needs scoping.
 - [ ] 13. Credential provisioning (sign-up before the run). Later and advanced; reuses the `Extraction` primitive.
@@ -35,20 +35,22 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   commit of whichever step next touches each file, not as a standalone big-bang change.
 
 ## Current step
-Step 10: LLM: query run history in natural language
+Step 11: LLM: commit-message assistant ("meta")
 Requirements: none yet (needs requirements and a spec first)
 Status: not started
 
 ## Handoff notes
-- Done: step 9 race gate (full `scripts/race.sh` clean). Step 9a: `OpenDB` uses busy_timeout(5000) + WAL, `&`-joins
-  pragmas onto a path with a query; `generateRunInsight` fails the insight if `CompleteInsight` errors. Tests:
-  `TestCompleteInsight_SucceedsDuringOpenRead`, `TestCompleteInsight_WaitsForOtherWriter`,
-  `TestOpenDB_PathWithQueryKeepsPragmas`, `TestRunInsightFailsWhenCompletionCannotBeSaved`.
-  `TestRunInsightAsyncLifecycleAndReuse` (was 2/10 flaky) passed 10/10 under race.
-- Next action: step 10 needs requirements and a spec before planning; ask the user for scope.
+- Done: step 10. `insight.Filter` (Validate/Apply/Describe), `RulesInterpreter`, `OllamaInterpreter` + `InterpretQuery`
+  (20s cap, rules fallback); `GET /history-fragment?q=` and the Ask form; public page `docs/history.md`. Tests:
+  `TestFilterValidate*`, `TestFilterApply`, `TestFilterDescribe`, `TestRulesInterpreterParse*`,
+  `TestOllamaInterpreter*`, `TestInterpretQuery*`, `TestHistoryQuery*`, `TestIndexHasHistoryQueryForm`. Race clean.
+- Next action: step 11 needs requirements and a spec before planning; ask the user for scope.
 - Uncommitted: none.
-- Decisions: D-013 (the user asked for D-009, already taken by credential masking).
-- Watch out: C: had ~3.7GB free after the user cleaned up; Docker Desktop dies when C: fills. Tests OOM with the Go
+- Decisions: D-014 (logged).
+- Watch out: ui-checker had no Playwright, so the Ask form was checked from HTML/CSS only (no screenshots). The
+  "not understood" note shows beside "No runs match" on an empty DB (left as is). Global button contrast ~3.9:1
+  (pre-existing). Never put `python`/`python3` in Bash here: the Windows Store alias hangs the shell.
+  Other notes: C: had ~3.7GB free after the user cleaned up; Docker Desktop dies when C: fills. Tests OOM with the Go
   cache on C:; set GOCACHE/GOTMPDIR/TMP to `D:/.gocache-primus`. CRLF-only gofmt hits on untouched files:
   `internal/importer/importer.go`, `importer_test.go`, `internal/web/registry.go`, `registry_test.go`.
   No `ui-checker` screenshot of the rate fields yet. Rate docs live in `docs/load.md` (docs_test pins the page list).
@@ -68,3 +70,4 @@ Status: not started
 - 2026-10-21 step 9 partial (`be88791`)
 - 2026-10-21 step 9 done (`855d841`)
 - 2026-10-21 step 9a done (`e4ab16c`, `855d841`)
+- 2026-10-21 step 10 done (`6d93009`..`3304a33`)
