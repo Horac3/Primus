@@ -70,9 +70,8 @@ func (r *registry[T]) Start(parent context.Context, id string, fn func(ctx conte
 	// Opportunistic sweep: drop finished results older than the TTL so the
 	// registry can't grow unbounded across a long session.
 	for otherID, other := range r.runs {
-		if otherID != id && other.finishedAt.IsZero() {
-			continue
-		}
+		// finishedAt is written by the job goroutine without r.mu; close(done)
+		// is the happens-before, so read it only after done.
 		select {
 		case <-other.done:
 			if time.Since(other.finishedAt) > r.TTL {
@@ -98,9 +97,8 @@ func (r *registry[T]) startWithHandle(parent context.Context, id string, h *hand
 	// Opportunistic sweep: drop finished results older than the TTL so the
 	// registry can't grow unbounded across a long session.
 	for otherID, other := range r.runs {
-		if otherID != id && other.finishedAt.IsZero() {
-			continue
-		}
+		// finishedAt is written by the job goroutine without r.mu; close(done)
+		// is the happens-before, so read it only after done.
 		select {
 		case <-other.done:
 			if time.Since(other.finishedAt) > r.TTL {
