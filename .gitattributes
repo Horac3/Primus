@@ -1,0 +1,2 @@
+.claude/**/*.sh text eol=lf
+.claude/kit/commands.env text eol=lf

@@ -22,3 +22,7 @@ Thumbs.db
 /agent_instructions/
 .bob/
 bob_sessions/
+.claude/settings.local.json
+.claude/kit/logs/
+CLAUDE.local.md
+*.kit-new

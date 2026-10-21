@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "model": "opusplan",
+  "permissions": {
+    "allow": [
+      "Bash(.claude/kit/check.sh)",
+      "Bash(.claude/kit/check.sh *)",
+      "Bash(bash .claude/kit/check.sh *)",
+      "Bash(./.claude/kit/check.sh *)",
+      "Bash(.claude/kit/context.sh *)",
+      "Bash(bash .claude/kit/context.sh *)",
+      "Bash(scripts/race.sh)",
+      "Bash(scripts/race.sh *)",
+      "Bash(bash scripts/race.sh *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch --show-current)",
+      "Bash(git ls-files *)",
+      "Bash(git rev-parse *)",
+      "Bash(git blame *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(go list *)",
+      "Bash(go env *)",
+      "Bash(go version)",
+      "Bash(go doc *)",
+      "Bash(gofmt -l *)",
+      "Bash(golangci-lint run *)",
+      "Bash(node .claude/kit/shot.mjs *)",
+      "Bash(npx -y impeccable detect *)",
+      "Bash(npx impeccable detect *)",
+      "Bash(.claude/kit/design-pack.sh)",
+      "Bash(.claude/kit/design-pack.sh --list)"
+    ],
+    "ask": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git rebase *)",
+      "Bash(git merge *)",
+      "Bash(git cherry-pick *)",
+      "Bash(git switch *)",
+      "Bash(git checkout *)",
+      "Bash(docker *)",
+      "Bash(docker-compose *)",
+      "Bash(go get *)",
+      "Bash(go mod *)",
+      "Bash(go install *)",
+      "Bash(go generate *)",
+      "Bash(go run *)",
+      "Bash(gofmt -w *)",
+      "Bash(npx *)"
+    ],
+    "deny": [
+      "Bash(rm *)",
+      "Bash(rmdir *)",
+      "Bash(unlink *)",
+      "Bash(shred *)",
+      "Bash(git rm *)",
+      "Bash(git clean *)",
+      "Bash(git reset --hard *)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git branch -D *)",
+      "Bash(git stash drop *)",
+      "Bash(git stash clear *)",
+      "Bash(find * -delete *)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(**/.env)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.sh\"" }]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-files.sh\"" }]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-context.sh\"" }]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/kit/statusline.sh\""
+  }
+}
