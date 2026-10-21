@@ -122,6 +122,25 @@ func TestMarkdownReport(t *testing.T) {
 		}
 	})
 
+	t.Run("endpoint template with userinfo and unresolved host is redacted", func(t *testing.T) {
+		db := newTestDB(t)
+		if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+			ID: "req-ui", Name: "UI", Method: "GET", URLTemplate: "http://u:p@{{host}}/x?k=1",
+		}); err != nil {
+			t.Fatalf("SaveRequestDefinition: %v", err)
+		}
+		if err := store.SaveTestConfig(db, model.TestConfig{ID: "cfg-ui", RequestID: "req-ui", Mode: model.ModeBurst}); err != nil {
+			t.Fatalf("SaveTestConfig: %v", err)
+		}
+		if err := store.SaveRun(db, model.Run{ID: "run-ui", TestConfigID: "cfg-ui", Outcome: model.OutcomePass}); err != nil {
+			t.Fatalf("SaveRun: %v", err)
+		}
+		body := getExport(t, web.NewServer(db), "/runs/run-ui/report.md").Body.String()
+		if !strings.Contains(body, "GET http://{{host}}/x") || strings.Contains(body, "u:p") || strings.Contains(body, "k=1") {
+			t.Errorf("endpoint not redacted:\n%s", body)
+		}
+	})
+
 	t.Run("deleted endpoint is stated", func(t *testing.T) {
 		db := newTestDB(t)
 		if err := store.SaveRun(db, model.Run{ID: "run-orphan", TestConfigID: "cfg-gone", Outcome: model.OutcomePass}); err != nil {
@@ -188,6 +207,7 @@ func TestHTMLReport(t *testing.T) {
 		for _, want := range []string{
 			"<svg", "PASSED", "GET https://api.example.test/v1/orders", "p95 under 100ms",
 			"via rules", "Latency is stable.", "http://h.test/x",
+			"finished " + now.Add(3*time.Second).Format("2006-01-02 15:04:05"),
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("report missing %q", want)

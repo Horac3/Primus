@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -118,8 +117,7 @@ func reportHTMLHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 
 // mdCell makes free text safe inside a Markdown table cell.
 func mdCell(s string) string {
-	s = strings.NewReplacer("|", `\|`, "\r", " ", "\n", " ").Replace(s)
-	return redactURLs(s)
+	return strings.NewReplacer(`\`, `\\`, "|", `\|`, "\r", " ", "\n", " ").Replace(redactURLs(s))
 }
 
 func renderMarkdown(rd reportData) string {
@@ -199,7 +197,11 @@ func renderMarkdown(rd reportData) string {
 
 	switch {
 	case rd.Insight != nil && rd.Insight.Status == store.InsightDone:
-		fmt.Fprintf(&b, "## Insight (%s)\n\n%s\n", rd.Insight.Analyzer, redactURLs(rd.Insight.Text))
+		who := rd.Insight.Analyzer
+		if rd.Insight.Model != "" {
+			who += " / " + rd.Insight.Model
+		}
+		fmt.Fprintf(&b, "## Insight (%s)\n\n%s\n", who, redactURLs(rd.Insight.Text))
 	default:
 		b.WriteString("## Insight\n\nNo insight generated.\n")
 	}
@@ -215,18 +217,24 @@ func setAttachment(w http.ResponseWriter, contentType, runID, ext string) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "primus-run-"+name+"."+ext))
 }
 
-var urlInText = regexp.MustCompile(`https?://[^\s"'<>]+`)
+var urlInText = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
 
 // redactURLs reduces every URL found in free text to scheme://host/path. Query
-// strings, fragments and userinfo can carry credentials, and Go transport
-// errors embed the full target URL.
+// strings, fragments and userinfo can carry credentials, and Go transport and
+// request-parse errors embed the URL as typed. It works on the text rather
+// than url.Parse, because a URL that fails to parse must be redacted too.
 func redactURLs(s string) string {
 	return urlInText.ReplaceAllStringFunc(s, func(raw string) string {
-		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
-			return cutAt(raw, "?#")
+		schemeEnd := strings.Index(raw, "://") + len("://")
+		rest := cutAt(raw[schemeEnd:], "?#")
+		authority, path := rest, ""
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			authority, path = rest[:i], rest[i:]
 		}
-		return u.Scheme + "://" + u.Host + u.EscapedPath()
+		if i := strings.LastIndexByte(authority, '@'); i >= 0 {
+			authority = authority[i+1:]
+		}
+		return raw[:schemeEnd] + authority + path
 	})
 }
 

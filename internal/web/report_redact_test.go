@@ -65,6 +65,21 @@ func TestRedactURLs(t *testing.T) {
 			want: "context deadline exceeded",
 		},
 		{
+			name: "strips userinfo when the URL does not parse",
+			in:   `Request failed: parse "http://u:p@{{host}}/x?k=1": invalid character "{" in host name`,
+			want: `Request failed: parse "http://{{host}}/x": invalid character "{" in host name`,
+		},
+		{
+			name: "strips userinfo after an invalid escape",
+			in:   `parse "http://u:p@h.test/%zz?api_key=s": invalid URL escape`,
+			want: `parse "http://h.test/%zz": invalid URL escape`,
+		},
+		{
+			name: "matches an uppercase scheme",
+			in:   `parse "HTTP://u:p@{{h}}/x?api_key=s": bad`,
+			want: `parse "HTTP://{{h}}/x": bad`,
+		},
+		{
 			name: "redacts every URL in the text",
 			in:   "a http://x.test/?k=1 b https://y.test/p?k=2",
 			want: "a http://x.test/ b https://y.test/p",
