@@ -39,6 +39,24 @@ func last4(s string) string {
 	return s[len(s)-4:]
 }
 
+// outcomeLabel is the verdict wording shown on the run page and in reports.
+func outcomeLabel(o model.RunOutcome) string {
+	switch o {
+	case model.OutcomePass:
+		return "✓ PASSED"
+	case model.OutcomeNoAssertions:
+		return "◎ Completed — no assertions configured"
+	case model.OutcomeFailNoRequests:
+		return "✗ FAILED — no requests completed"
+	case model.OutcomeFailNoLogins:
+		return "✗ FAILED — no successful logins"
+	case model.OutcomeFailRateNotSustained:
+		return "✗ FAILED — target rate not sustained"
+	default:
+		return "✗ FAILED"
+	}
+}
+
 // templateFuncs are helpers available inside every template.
 var templateFuncs = template.FuncMap{
 	"mul":    func(a, b float64) float64 { return a * b },
@@ -53,22 +71,7 @@ var templateFuncs = template.FuncMap{
 			return "badge-fail"
 		}
 	},
-	"outcomeLabel": func(o model.RunOutcome) string {
-		switch o {
-		case model.OutcomePass:
-			return "✓ PASSED"
-		case model.OutcomeNoAssertions:
-			return "◎ Completed — no assertions configured"
-		case model.OutcomeFailNoRequests:
-			return "✗ FAILED — no requests completed"
-		case model.OutcomeFailNoLogins:
-			return "✗ FAILED — no successful logins"
-		case model.OutcomeFailRateNotSustained:
-			return "✗ FAILED — target rate not sustained"
-		default:
-			return "✗ FAILED"
-		}
-	},
+	"outcomeLabel": outcomeLabel,
 	"authSummary": func(a model.AuthConfig) string {
 		switch a.Type {
 		case model.AuthTypeBearer:
@@ -326,6 +329,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(db, tmpl, reg, analyzer))
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
 	mux.HandleFunc("GET /runs/{id}/series.csv", seriesCSVHandler(db))
+	mux.HandleFunc("GET /runs/{id}/report.md", reportMarkdownHandler(db))
 	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl, configuredQueryInterpreter()))
 	mux.HandleFunc("GET /docs", docsIndexHandler(tmpl))
 	mux.HandleFunc("GET /docs/{slug}", docsPageHandler(tmpl))
