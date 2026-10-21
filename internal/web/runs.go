@@ -27,7 +27,7 @@ type runningData struct {
 	TimeSeries []model.Point
 }
 
-func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.HandlerFunc {
+func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *scopeGuard) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		def, err := requestDefFromForm(r)
 		if err != nil {
@@ -39,6 +39,17 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 		}
 		if def.Name == "" {
 			def.Name = def.Method + " " + def.URLTemplate
+		}
+
+		// From here until the run is registered, a delete or clear of this endpoint's scope must not
+		// slip in: it would either miss the run or leave the endpoint in a deleted collection.
+		guard.mu.Lock()
+		defer guard.mu.Unlock()
+		if def.CollectionID != "" {
+			if _, err := store.GetCollection(db, def.CollectionID); err != nil {
+				http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 
 		// The run uses the resolved copy; the saved definition keeps the {{base_url}} template.
@@ -112,7 +123,7 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 
 		// One id for the registry entry, the poll URL, and the persisted run.
 		runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
-		h := &runHandle{done: make(chan struct{}), detail: detail}
+		h := &runHandle{done: make(chan struct{}), detail: detail, requestID: def.ID}
 		reg.startWithHandle(r.Context(), runID, h, func(ctx context.Context, h *runHandle) (model.Run, error) {
 			run, err := engine.RunWithPool(ctx, resolved, cfg, auth, pool, &h.snapshot)
 			if err != nil {

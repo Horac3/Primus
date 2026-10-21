@@ -1,0 +1,57 @@
+{{- /* collections-panel.html — fragment: collection manager. Target: #collections-panel */ -}}
+{{define "confirm-box"}}
+<div class="card" role="alert" data-testid="confirm-box">
+  <p>{{.Prompt}}</p>
+  <form hx-post="{{.Action}}" hx-target="{{.Target}}" hx-swap="innerHTML" style="display:flex;gap:.5rem;flex-wrap:wrap">
+    {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+    <input type="hidden" name="confirm" value="1">
+    <button type="submit">Confirm</button>
+    <button type="button" class="secondary" onclick="this.closest('[data-testid=confirm-box]').remove()">Cancel</button>
+  </form>
+</div>
+{{end}}
+<div class="card" data-testid="collections-panel">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <strong>Collections</strong>
+    <button type="button" class="secondary" onclick="document.getElementById('collections-panel').innerHTML=''">Close</button>
+  </div>
+  <p class="muted">An endpoint URL that starts with <code>{{"{{base_url}}"}}</code> uses its collection's base URL,
+    so one edit points the whole group at another host.</p>
+
+  {{with .Error}}<p class="verdict-fail" role="status">{{.}}</p>{{end}}
+  {{with .Message}}<p class="verdict-pass" role="status">{{.}}</p>{{end}}
+  {{with .Confirm}}{{template "confirm-box" .}}{{end}}
+
+  {{range .Rows}}
+  <div class="card" data-testid="collection-row">
+    <strong>{{.Name}}</strong>{{if .BuiltIn}} <span class="muted">(built in)</span>{{end}}
+    <span class="muted">· {{.Counts.Endpoints}} endpoints · {{.Counts.Runs}} runs</span>
+    <form hx-post="/collections/{{.ID}}" hx-target="#collections-panel" hx-swap="innerHTML"
+          style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem">
+      <input type="text" name="name" value="{{.Name}}" required aria-label="Collection name" style="flex:1 1 10rem;min-width:0">
+      <input type="text" name="base_url" value="{{.BaseURL}}" placeholder="https://api.example.com" aria-label="Base URL" style="flex:2 1 14rem;min-width:0">
+      <button type="submit" class="secondary">Save</button>
+    </form>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem">
+      <form hx-post="/history/clear" hx-target="next .slot" hx-swap="innerHTML">
+        <input type="hidden" name="scope" value="collection">
+        <input type="hidden" name="id" value="{{.ID}}">
+        <button type="submit" class="secondary">Clear history</button>
+      </form>
+      <form hx-post="/collections/{{.ID}}/delete" hx-target="#collections-panel" hx-swap="innerHTML">
+        <button type="submit" class="secondary">Delete collection</button>
+      </form>
+    </div>
+    <div class="slot"></div>
+  </div>
+  {{else}}
+  <p class="muted">No collections yet. Create one below, or save an endpoint to start "My endpoints".</p>
+  {{end}}
+
+  <form hx-post="/collections" hx-target="#collections-panel" hx-swap="innerHTML"
+        style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+    <input type="text" name="name" required placeholder="New collection name" aria-label="New collection name" style="flex:1 1 10rem;min-width:0">
+    <input type="text" name="base_url" placeholder="Base URL (optional)" aria-label="New collection base URL" style="flex:2 1 14rem;min-width:0">
+    <button type="submit">Create</button>
+  </form>
+</div>

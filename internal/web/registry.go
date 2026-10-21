@@ -20,8 +20,9 @@ type handle[T any] struct {
 	finishedAt time.Time
 	once       sync.Once
 	snapshot   atomic.Pointer[[]model.Point]
-	// detail is set before the run starts and only read afterwards.
-	detail string
+	// detail and requestID are set before the run starts and only read afterwards.
+	detail    string
+	requestID string
 }
 
 // registry tracks in-flight jobs for async execution + polling.
@@ -126,6 +127,25 @@ func (r *registry[T]) finish(id string, h *handle[T], run T, err error) {
 		h.finishedAt = time.Now()
 		close(h.done)
 	})
+}
+
+// ActiveRequestIDs returns the endpoint IDs of runs still in flight. A run stays active until its
+// goroutine has finished and persisted, so a stopping run counts; a finished result that has not
+// been polled yet does not.
+func (r *registry[T]) ActiveRequestIDs() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	active := make(map[string]bool)
+	for _, h := range r.runs {
+		select {
+		case <-h.done:
+		default:
+			if h.requestID != "" {
+				active[h.requestID] = true
+			}
+		}
+	}
+	return active
 }
 
 // Poll reports a run's state: "running" (result nil) or "done" (result set).
