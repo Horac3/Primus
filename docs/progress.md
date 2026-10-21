@@ -27,7 +27,7 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 9a. Fix: SQLite busy errors drop writes. `OpenDB` has no busy timeout or WAL, so a write that overlaps a read
   fails with `SQLITE_BUSY`; a dropped `CompleteInsight` leaves the insight stuck on "Generating...". D-013.
 - [x] 10. LLM: query run history in natural language (FR-HIST-01..04, NFR-HIST-05, D-014).
-- [ ] 12. Downloadable test reports and insights. Needs scoping.
+- [x] 12. Downloadable test reports and insights (FR-REPORT-01..05, D-015).
 - [ ] 13. Credential provisioning (sign-up before the run). Later and advanced; reuses the `Extraction` primitive.
   Needs scoping and a `/decide`.
 - [ ] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. Do it as the first
@@ -36,17 +36,23 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   fallback, not in the binary or image. FR-META-01..04. Requirements written; not planned yet.
 
 ## Current step
-Step 12: Downloadable test reports and insights
-Requirements: none yet (needs scoping)
+Step 13: Credential provisioning (sign-up before the run)
+Requirements: none yet (needs scoping and a `/decide`)
 Status: not started (step 11 "meta" is deliberately last; its requirements FR-META-01..04 are written)
 
 ## Handoff notes
-- Done (docs only, no code): wrote FR-META-01..04 in `docs/requirements.md` (dev tooling under `tools/`, Ollama only,
-  Conventional Commits validation, rules fallback, excluded from binary and image); moved step 11 to the end of the
-  roadmap (number kept); ran a manual remap of `docs/architecture.md` (no `/remap` skill exists in this repo).
-- Next action: step 12 needs scoping with the user before planning. Step 11 is not to be planned yet.
-- Uncommitted: `docs/requirements.md`, `docs/progress.md`, `docs/architecture.md`.
-- Decisions: step 11 is developer tooling, not a product feature; Ollama only, never built into `cmd/primus` or the image.
+- Done (step 12): `internal/web/report.go` serves `GET /runs/{id}/report.html|report.md|series.csv` (attachments,
+  404 on unknown run); `redactURLs` (text-based, case-insensitive) cuts URLs in error causes to scheme://host/path on
+  the run page, result card, login summary and exports. Tests: `TestRedactURLs`, `TestErrorCausesAreRedactedOnRunPageAndCard`,
+  `TestSeriesCSV`, `TestMarkdownReport`, `TestHTMLReport` (incl. leak sweep). Docs: `docs/reports.md`. Review fixes applied.
+- Next action: step 13 needs scoping with the user and a `/decide` before planning. Step 11 is not to be planned yet.
+- Uncommitted: `docs/progress.md`, `docs/architecture.md` (report.go line), until the handoff commit.
+- Decisions: D-015 (reports rendered on request, redacted at render time). CLAUDE.md now says Claude commits green
+  cycles itself (user decision); the Skill tool cannot run `/commit`, so use git directly.
+- Not done: `scripts/race.sh` was not run (no goroutine code changed; CI runs it). No `ui-checker` look at the
+  download links. Review leftovers (minor, skipped): store errors all map to 404; Markdown insight text and pool name
+  are not Markdown-escaped; HTML insight text collapses newlines; rate section gates differ (HTML TargetRate vs MD mode);
+  no tests for rate mode, login rows or `mdCell` escaping in exports.
 - Watch out: ui-checker had no Playwright, so the Ask form was checked from HTML/CSS only (no screenshots). The
   "not understood" note shows beside "No runs match" on an empty DB (left as is). Global button contrast ~3.9:1
   (pre-existing). Never put `python`/`python3` in Bash here: the Windows Store alias hangs the shell.
@@ -70,4 +76,5 @@ Status: not started (step 11 "meta" is deliberately last; its requirements FR-ME
 - 2026-10-21 step 9 done (`855d841`)
 - 2026-10-21 step 9a done (`e4ab16c`, `855d841`)
 - 2026-10-21 step 10 done (`6d93009`..`3304a33`)
-- 2026-10-21 step 11 requirements written, step moved last, architecture remapped (uncommitted)
+- 2026-10-21 step 11 requirements written, step moved last, architecture remapped (`3ed6303`)
+- 2026-10-21 step 12 done (`a39cfc6`..`9702601`)

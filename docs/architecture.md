@@ -15,7 +15,8 @@ internal/engine/ engine.go (entrypoints Run/RunWithSnapshot/RunWithPool, buildRu
                  aggregate.go (aggregator goroutine, percentiles, histogram, series) · verdict.go (ValidateTestConfig,
                  assertions, DetermineOutcome) · probe.go (ResolveAuth) · pool.go (login phase, per-worker tokens)
 internal/store/  store.go (SQLite open, migrate, requests/configs/runs/auth/insights) · pools.go (credential pools)
-internal/web/    web.go (routes + most handlers) · pools.go (pool panel) · registry.go (async run registry) · templates/ · static/
+internal/web/    web.go (routes + most handlers) · pools.go (pool panel) · registry.go (async run registry) ·
+                 report.go (html/md/csv run downloads, `redactURLs`, `endpointLabel`) · templates/ · static/
 internal/insight/ analyzer.go (interface, rules fallback) · insight.go (summary, findings, grounding) · ollama.go ·
                  query_filter.go (history `Filter`: Validate/Apply/Describe) · query_rules.go (rules parser) ·
                  query_ollama.go (Ollama interpreter, 20s cap, rules fallback via `InterpretQuery`)
