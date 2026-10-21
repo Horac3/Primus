@@ -46,8 +46,8 @@ Auth is applied at dispatch by `applyAuth`; a header value `[GLOBAL]` pulls in g
 
 ## Build and deploy
 `deploy/Dockerfile`: `golang:1.25` builder, `CGO_ENABLED=0`, distroless nonroot, `/data` for the DB.
-CI today is `.github/workflows/docker-publish.yml` only (builds and pushes to Docker Hub on `main`/`master` and `v*`
-tags). It does not run tests or the race detector yet (roadmap step 6).
+CI is `.github/workflows/docker-publish.yml` (workflow `CI`): a `test` job (build, vet, gofmt, test, `-race`) on every
+push and PR, and a `publish` job (`needs: test`) that pushes to Docker Hub only on `main`/`master` and `v*` tags.
 
 ## Hotspots
 `internal/web/web.go` (1218 lines, most handlers) and `internal/engine/engine.go` (729 lines). History in this clone

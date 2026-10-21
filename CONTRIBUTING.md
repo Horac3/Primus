@@ -42,7 +42,9 @@ arguments through (for example `-run TestName`).
 
 ## Docker Hub publishing
 
-The `Publish Docker image` GitHub Actions workflow publishes images to
+The `CI` GitHub Actions workflow runs build, vet, a gofmt check, `go test ./...`
+and `go test -race ./...` on every push and pull request. Only when those pass,
+and only for pushes to `master`, `main` or a `v*` tag, does it publish images to
 `DOCKERHUB_NAMESPACE/primus`. Configure these in the repository's **Settings
 → Secrets and variables → Actions** before merging the workflow:
 
@@ -52,6 +54,8 @@ The `Publish Docker image` GitHub Actions workflow publishes images to
   the `primus` repository. Create that repository on Docker Hub first.
 
 Each push to `master` or `main` publishes `0.1.0-beta.<workflow run number>`.
+The run number also counts test-only runs (branches and pull requests), so beta
+numbers are unique but not consecutive.
 To publish a stable release, push a version tag such as `v0.1.0`; the workflow
 publishes `0.1.0` and updates `latest`. A version tag containing a prerelease
 suffix, such as `v0.1.0-beta.4`, publishes that exact prerelease tag without
