@@ -22,8 +22,10 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
     The natural-language authoring and payload-generation UI stays enabled and returns 502 on use. Decide the default
     (rules unless the profile is on, or say in the UI that Ollama is unreachable). Leave `depends_on` to the user. (`975b829`, `611b4f8`)
 - [x] 8. Auth-probe UI wiring: attempt count, rate and credential fields in the UI. FR-PROBE-01..04. (`1d9e95a`..`ed4ed09`)
-- [~] 9. Open-loop fixed req/s mode. FR-RATE-01..04. Start the step with `/decide` on the dispatcher design
+- [x] 9. Open-loop fixed req/s mode. FR-RATE-01..04. Start the step with `/decide` on the dispatcher design
   (ticker-driven release, in-flight cap, `Dropped` accounting, latency from intended send time).
+- [x] 9a. Fix: SQLite busy errors drop writes. `OpenDB` has no busy timeout or WAL, so a write that overlaps a read
+  fails with `SQLITE_BUSY`; a dropped `CompleteInsight` leaves the insight stuck on "Generating...". D-013.
 - [ ] 10. LLM: query run history in natural language. Needs requirements and a spec first.
 - [ ] 11. LLM: commit-message assistant ("meta"). Needs requirements and a spec first.
 - [ ] 12. Downloadable test reports and insights. Needs scoping.
@@ -33,23 +35,24 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   commit of whichever step next touches each file, not as a standalone big-bang change.
 
 ## Current step
-Step 9: Open-loop fixed req/s mode
-Requirements: FR-RATE-01..04
-Status: in progress — all behaviours done and committed; race detector run outstanding
+Step 10: LLM: query run history in natural language
+Requirements: none yet (needs requirements and a spec first)
+Status: not started
 
 ## Handoff notes
-- Done: `mode: rate` + `target_rate` (D-012): start-anchored schedule, per-worker slot cap, `Dropped`, latency from
-  intended send, `achieved_rate`, `fail_rate_not_sustained`; web form/result/run page; CLI exit 1. Tests:
-  `internal/engine/rate_test.go`, `rate_internal_test.go`, `internal/web/rate_test.go`, `TestRunCmd_RateNotSustained*`,
-  `TestRateFields_JSONRoundTrip`. Reviewer + concurrency-reviewer findings fixed (c68a64d).
-- Next action: free C: space (355MB free, Docker exit 125) or check CI, run `scripts/race.sh`, then mark step 9 `[x]`.
+- Done: step 9 race gate (full `scripts/race.sh` clean). Step 9a: `OpenDB` uses busy_timeout(5000) + WAL, `&`-joins
+  pragmas onto a path with a query; `generateRunInsight` fails the insight if `CompleteInsight` errors. Tests:
+  `TestCompleteInsight_SucceedsDuringOpenRead`, `TestCompleteInsight_WaitsForOtherWriter`,
+  `TestOpenDB_PathWithQueryKeepsPragmas`, `TestRunInsightFailsWhenCompletionCannotBeSaved`.
+  `TestRunInsightAsyncLifecycleAndReuse` (was 2/10 flaky) passed 10/10 under race.
+- Next action: step 10 needs requirements and a spec before planning; ask the user for scope.
 - Uncommitted: none.
-- Decisions: none outside D-012.
-- Watch out: rate docs are a section of `docs/load.md`, not a new page, because `docs/docs_test.go` asserts the exact
-  page list; ask the user before changing that test. No `ui-checker` screenshot of the rate fields yet.
+- Decisions: D-013 (the user asked for D-009, already taken by credential masking).
+- Watch out: C: had ~3.7GB free after the user cleaned up; Docker Desktop dies when C: fills. Tests OOM with the Go
+  cache on C:; set GOCACHE/GOTMPDIR/TMP to `D:/.gocache-primus`. CRLF-only gofmt hits on untouched files:
+  `internal/importer/importer.go`, `importer_test.go`, `internal/web/registry.go`, `registry_test.go`.
+  No `ui-checker` screenshot of the rate fields yet. Rate docs live in `docs/load.md` (docs_test pins the page list).
 - Step 14 partly done: engine.go split (b023f67); web.go split still pending.
-- Tests OOM with the Go cache on C:; set GOCACHE/GOTMPDIR/TMP to `D:/.gocache-primus` (check.sh via test-runner OOM'd).
-- CRLF-only gofmt hits on untouched files now also include `internal/importer/importer.go` and `importer_test.go`.
 - Run /remap: engine.go split into dispatch.go, aggregate.go, verdict.go; new rate.go.
 - Manual steps the user does by hand, never Claude: `git filter-repo`, interactive rebase, compose `depends_on`,
   Docker Hub push, deleting `AGENTS.md`/`.bobignore`/`primus-scaffold-plan.md`/root `web/`, repo-wide `eol` rule.
@@ -63,3 +66,5 @@ Status: in progress — all behaviours done and committed; race detector run out
 - 2026-10-21 step 7 done (`611b4f8`)
 - 2026-10-21 step 8 done (`ed4ed09`)
 - 2026-10-21 step 9 partial (`be88791`)
+- 2026-10-21 step 9 done (`855d841`)
+- 2026-10-21 step 9a done (`e4ab16c`, `855d841`)
