@@ -71,6 +71,11 @@ Body: bullets for each specific change, then a final `Tests:` line saying what t
 
 ## Workflow
 - Start every conversation with `/next`. One roadmap step per conversation; `/clear` between steps.
+- Commit automatically (user decision, 2026-10-21): when a green cycle is done, commit it yourself using the `/commit`
+  conventions (logical groups, Conventional Commits, `Tests:` line, attribution trailer, explicit `git add <files>`),
+  without waiting for the user to run `/commit`. The Skill tool cannot invoke `/commit` (user-only), so run the git
+  commands directly. This overrides "do not commit unless asked" in `working-rules.md`. Still never push, never rewrite
+  history, never commit a failing suite.
 - Plan in plan mode (Opus via `opusplan`), build on Sonnet, delegate checks to `test-runner`, review with `/review`
   (add `concurrency-reviewer` when goroutine code changed), hand off with `/handoff` before context reaches ~60%.
 
