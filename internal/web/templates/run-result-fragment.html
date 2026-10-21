@@ -15,6 +15,11 @@
     <tr><th>Errors</th><td>{{.Summary.ErrorCount}}</td>
         <th>Error rate</th><td>{{printf "%.1f%%" (mul .Summary.ErrorRate 100.0)}}</td>
         <th></th><td></td></tr>
+    {{if .Summary.TargetRate}}
+    <tr><th>Target rate</th><td>{{printf "%g" .Summary.TargetRate}}/s</td>
+        <th>Achieved rate</th><td>{{printf "%.1f" .Summary.AchievedRate}}/s</td>
+        <th>Dropped</th><td>{{.Summary.Dropped}}</td></tr>
+    {{end}}
   </table>
   {{template "cancelled-note" .}}
   {{if .Summary.StatusCounts}}

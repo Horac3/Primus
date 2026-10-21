@@ -102,6 +102,8 @@ function toggleMode() {
   document.getElementById('fields-burst').style.display = m === 'burst' ? '' : 'none';
   document.querySelectorAll('#fields-burst input').forEach(i => i.disabled = m !== 'burst');
   document.getElementById('fields-probe').style.display = probe ? '' : 'none';
+  document.getElementById('fields-rate').style.display = m === 'rate' ? '' : 'none';
+  document.querySelectorAll('#fields-rate input').forEach(i => i.disabled = m !== 'rate');
   document.querySelectorAll('#fields-probe input, #fields-probe select').forEach(i => i.disabled = !probe);
 }
 

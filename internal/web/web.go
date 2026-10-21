@@ -61,6 +61,8 @@ var templateFuncs = template.FuncMap{
 			return "✗ FAILED — no requests completed"
 		case model.OutcomeFailNoLogins:
 			return "✗ FAILED — no successful logins"
+		case model.OutcomeFailRateNotSustained:
+			return "✗ FAILED — target rate not sustained"
 		default:
 			return "✗ FAILED"
 		}
@@ -1147,6 +1149,8 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 		cfg.Mode = model.ModeSoak
 	case "auth_probe":
 		cfg.Mode = model.ModeAuthProbe
+	case "rate":
+		cfg.Mode = model.ModeRate
 	default:
 		cfg.Mode = model.ModeLoad
 	}
@@ -1157,10 +1161,11 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 		return cfg, err
 	}
 
-	// Stop condition follows the mode: load and soak are duration-driven
-	// in the UI (they share the duration field); burst/auth-probe stay
-	// count-driven. The engine still accepts either for any mode.
-	if cfg.Mode == model.ModeLoad || cfg.Mode == model.ModeSoak {
+	// Stop condition follows the mode: load, soak and rate are
+	// duration-driven in the UI (they share the duration field);
+	// burst/auth-probe stay count-driven. The engine still accepts either
+	// for any mode but rate.
+	if cfg.Mode == model.ModeLoad || cfg.Mode == model.ModeSoak || cfg.Mode == model.ModeRate {
 		raw := strings.TrimSpace(r.FormValue("duration_seconds"))
 		if raw == "" {
 			cfg.Duration = 30 * time.Second
@@ -1198,6 +1203,15 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 			return cfg, fmt.Errorf("max_rate must be a number >= 0")
 		}
 		cfg.MaxRate = rate
+	}
+	// Shown in rate mode only; engine.ValidateTestConfig rejects a missing
+	// target in rate mode and any target elsewhere.
+	if raw := strings.TrimSpace(r.FormValue("target_rate")); raw != "" {
+		rate, err := strconv.ParseFloat(raw, 64)
+		if err != nil || !(rate > 0) || math.IsInf(rate, 0) {
+			return cfg, fmt.Errorf("target_rate must be a number > 0")
+		}
+		cfg.TargetRate = rate
 	}
 	cfg.AuthSource = model.AuthSource(r.FormValue("auth_source"))
 	if !cfg.AuthSource.Valid() {

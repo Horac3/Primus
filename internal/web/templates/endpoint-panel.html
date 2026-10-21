@@ -107,6 +107,7 @@
         <option value="burst">Burst (pulsed)</option>
         <option value="auth_probe">Auth probe</option>
         <option value="soak">Soak (timed)</option>
+        <option value="rate">Fixed rate (req/s)</option>
       </select>
     </label>
     <label>
@@ -138,6 +139,17 @@
         <label><span>Idle between bursts (ms)</span><input type="number" name="burst_idle_ms" value="500" min="0" disabled></label>
       </div>
     </details>
+  </div>
+
+  <div id="fields-rate" style="margin-top:.5rem;display:none">
+    <div class="row">
+      <label>
+        <span>Target requests per second</span>
+        <input type="number" name="target_rate" value="50" min="0" step="any" disabled>
+      </label>
+    </div>
+    <p class="muted" style="margin-top:.35rem">Requests go out on this schedule whether or not earlier ones have
+      answered. Concurrency becomes the most requests in flight; a request due while all are busy is dropped.</p>
   </div>
 
   <div id="fields-probe" style="margin-top:.5rem;display:none">

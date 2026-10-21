@@ -46,6 +46,18 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
 </table>
 </section>
 
+{{if .Summary.TargetRate}}
+<section>
+<h2>Rate</h2>
+<table>
+  <tr><th>Target rate</th><td>{{printf "%g" .Summary.TargetRate}}/s</td></tr>
+  <tr><th>Achieved rate</th><td>{{printf "%.1f" .Summary.AchievedRate}}/s</td></tr>
+  <tr><th>Dropped</th><td>{{.Summary.Dropped}}</td></tr>
+</table>
+<p class="muted">Latency is measured from each request's scheduled send time.</p>
+</section>
+{{end}}
+
 <section>
 <h2>Status codes</h2>
 <table>
