@@ -149,8 +149,9 @@ func TestProbe_SuccessfulTarget(t *testing.T) {
 	if !result.OK {
 		t.Error("OK = false, want true")
 	}
-	if result.LatencyMs <= 0 {
-		t.Errorf("LatencyMs = %d, want > 0", result.LatencyMs)
+	// LatencyMs is whole milliseconds, so a localhost probe can legitimately report 0.
+	if result.LatencyMs < 0 {
+		t.Errorf("LatencyMs = %d, want >= 0", result.LatencyMs)
 	}
 }
 
