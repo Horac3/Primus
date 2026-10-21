@@ -53,3 +53,19 @@ Only planned work is written up here. Shipped behaviour is documented in the pub
 ## Continuous integration (CI)
 - **NFR-CI-01** — Every push and pull request runs build, vet, tests and `go test -race` before any image is published.
   - Given a failing race test, when the workflow runs, then the Docker publish job does not run.
+
+## Run history query (HIST)
+- **FR-HIST-01** — A natural-language question becomes a validated `Filter`; unknown fields, unknown enum values and
+  out-of-range numbers are rejected. No SQL is generated.
+- **FR-HIST-02** — Primus applies the filter over stored runs: modes, outcome (pass | fail, which covers every `fail_*` |
+  no_assertions), stopped, time window (`within_hours`, or `since`/`until` dates), p50/p95/p99 bounds in ms, error-rate
+  bounds, minimum total requests, target text (substring of the request name or URL, resolved locally), sort (newest |
+  oldest | p95_desc | p95_asc | error_rate_desc) and limit (1–100, default 20).
+  - Given "failed burst runs", then only burst runs with a `fail*` outcome are listed, newest first.
+- **FR-HIST-03** — The result shows what the question was interpreted as and which interpreter ran (`ollama` or
+  `rules`), and says so when Ollama was unavailable.
+- **FR-HIST-04** — With Ollama absent, failing, slower than 20s or returning an invalid filter, the rules parser answers.
+  - Edge: a question the parser cannot understand lists every run with a note saying it was not understood.
+  - Edge: a blank question keeps the plain history list.
+- **NFR-HIST-05** — Only the question, today's date and the filter schema go to the model: no run data, URLs, config or
+  request names, bodies or credentials.

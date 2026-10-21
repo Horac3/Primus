@@ -154,3 +154,18 @@ whole `/data` directory: a live copy can catch the database and its `-wal` file 
 filesystem, so `/data` must not be bind-mounted from a network share or a Windows or macOS host folder; use the
 compose named volume. The README "Data and backups" section says so.
 Revisit if: writes still time out under heavy load, or Primus must support `/data` on network storage.
+
+## D-014: Run history query is a validated filter, interpreted in `insight`
+Date: 2026-10-21
+Status: accepted
+Context: Step 10. Users want to ask the run history questions in plain language. The core must work without Ollama
+(rule 6), and nothing secret may reach a model (rule 7).
+Decision: The model (or, without it, a keyword parser) turns the question into a fixed JSON `Filter`. Primus validates
+it strictly and applies it in memory over `store.ListAllRuns`. The model sees only the question, today's date and the
+schema. The code lives in `internal/insight` as `query_*.go`, beside the analyzer config it reuses, so there is no new
+package or commit scope. The Ollama call is synchronous on the request, capped at 20s, and falls back to rules on any
+failure. The UI shows the interpretation and which interpreter ran.
+Rejected: text-to-SQL (needs sandboxing and could reach credential columns); prose answers over run summaries (bounded
+by context size, hard to verify); an async job through the registry (one bounded call does not need it).
+Consequences: In-memory filtering loads every run on each query, which is fine at personal-tool scale.
+Revisit if: history grows to tens of thousands of runs (move the filter into SQL over indexed columns).
