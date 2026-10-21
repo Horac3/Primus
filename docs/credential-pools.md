@@ -190,6 +190,12 @@ Limits you should know:
   system and expect the data to remain after the run.
 - No email verification and no captcha handling: the target must accept a plain
   sign-up request.
+- A sign-up in flight when you press Stop may already exist on the target even
+  though Primus never saw the response, so that account is not saved. The next
+  batch continues the `{{seq}}` count after the last number attempted, so it
+  will not reuse those names.
+- **Concurrency** cannot exceed the pool's login concurrency (20 for a new
+  pool), and only one provisioning job can run per pool at a time.
 - Sign-up endpoints are often rate limited. Lower the concurrency if you see
   `HTTP 429`.
 

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Horac3/Primus/internal/credential"
@@ -32,6 +34,7 @@ type provisionResult struct {
 	Stored   int
 	SaveErr  string
 
+	seq        int // highest {{seq}} this job attempts; saved as the pool's ProvisionedSeq
 	rows       []model.Credential
 	maskFields []string
 }
@@ -45,10 +48,44 @@ type provisionView struct {
 	Result  *provisionResult
 }
 
-type provisionRegistry = registry[*provisionResult]
+// provisionRegistry tracks provisioning jobs and allows one running job per
+// pool, so two jobs cannot share {{seq}} numbers or push a pool over its cap
+// after their accounts already exist on the target.
+type provisionRegistry struct {
+	*registry[*provisionResult]
+	mu   sync.Mutex
+	busy map[string]bool
+}
 
 func newProvisionRegistry(db *sql.DB) *provisionRegistry {
-	return newRegistry(func(res *provisionResult) error { return persistProvisioned(db, res) })
+	p := &provisionRegistry{busy: map[string]bool{}}
+	p.registry = newRegistry(func(res *provisionResult) error {
+		defer p.release(res.PoolID)
+		return persistProvisioned(db, res)
+	})
+	return p
+}
+
+// acquire marks poolID as having a running job; false if it already has one.
+func (p *provisionRegistry) acquire(poolID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.busy[poolID] {
+		return false
+	}
+	p.busy[poolID] = true
+	return true
+}
+
+func (p *provisionRegistry) release(poolID string) {
+	p.mu.Lock()
+	delete(p.busy, poolID)
+	p.mu.Unlock()
+}
+
+// newJobID returns a unique id: the clock alone can repeat within one tick.
+func newJobID(prefix string) string {
+	return fmt.Sprintf("%s-%d-%s", prefix, time.Now().UnixNano(), strings.ToLower(rand.Text()[:6]))
 }
 
 // persistProvisioned stores a finished job's rows: a new pool, or appended to
@@ -65,9 +102,10 @@ func persistProvisioned(db *sql.DB, res *provisionResult) error {
 	if res.NewPool {
 		pool := defaultPool(res.PoolID, res.PoolName, rows)
 		pool.MaskedFields = mergeFields(pool.MaskedFields, mask)
+		pool.ProvisionedSeq = res.seq
 		err = store.SaveCredentialPool(db, pool)
 	} else {
-		err = store.AppendCredentials(db, res.PoolID, rows, mask)
+		err = store.AppendCredentials(db, res.PoolID, rows, mask, res.seq)
 	}
 	if err != nil {
 		log.Printf("provision: save accounts for pool %s: %v", res.PoolID, err)
@@ -172,6 +210,12 @@ func provisionSpecFromForm(r *http.Request) (model.ProvisionSpec, []string, erro
 
 	spec.ExtractField = strings.TrimSpace(r.FormValue("extract_field"))
 	if spec.ExtractField != "" {
+		if !fieldNamePattern.MatchString(spec.ExtractField) {
+			return spec, nil, fmt.Errorf("the saved field name may only use letters, digits, _, - and .")
+		}
+		if _, clash := fields[spec.ExtractField]; clash {
+			return spec, nil, fmt.Errorf("%q is already an account field; save the response value under another name", spec.ExtractField)
+		}
 		spec.Signup.Extraction = model.Extraction{
 			From:   model.ExtractFrom(strings.TrimSpace(r.FormValue("extract_from"))),
 			Path:   strings.TrimSpace(r.FormValue("extract_path")),
@@ -221,30 +265,56 @@ func poolProvisionHandler(db *sql.DB, tmpl *template.Template, reg *provisionReg
 		existing := strings.TrimSpace(r.FormValue("existing_pool_id"))
 		startSeq := 1
 		if existing != "" {
+			// Claim the pool before reading it, so the row count and seq
+			// counter cannot change under this job.
+			if !reg.acquire(existing) {
+				http.Error(w, "provisioning: another job is already adding accounts to this pool; wait for it or stop it",
+					http.StatusConflict)
+				return
+			}
 			pool, err := store.GetCredentialPoolMasked(db, existing)
 			if err != nil {
+				reg.release(existing)
 				http.Error(w, "provisioning: choose an existing pool or enter a name for a new one", http.StatusBadRequest)
 				return
 			}
 			if len(pool.Credentials)+spec.Count > model.MaxCredentialPoolRows {
+				reg.release(existing)
 				http.Error(w, fmt.Sprintf("provisioning: pool %q has %d accounts; at most %d more fit in the %d-account limit",
 					pool.Name, len(pool.Credentials), model.MaxCredentialPoolRows-len(pool.Credentials), model.MaxCredentialPoolRows),
 					http.StatusBadRequest)
 				return
 			}
+			limit := pool.LoginConcurrency
+			if limit <= 0 {
+				limit = model.DefaultLoginConcurrency
+			}
+			if spec.Concurrency > limit {
+				reg.release(existing)
+				http.Error(w, fmt.Sprintf("provisioning: concurrency can be at most %d (this pool's login concurrency)", limit),
+					http.StatusBadRequest)
+				return
+			}
 			res.PoolID, res.PoolName = pool.ID, pool.Name
-			startSeq = len(pool.Credentials) + 1
+			startSeq = max(pool.ProvisionedSeq, len(pool.Credentials)) + 1
 		} else {
 			name := strings.TrimSpace(r.FormValue("name"))
 			if name == "" {
 				http.Error(w, "provisioning: choose an existing pool or enter a name for a new one", http.StatusBadRequest)
 				return
 			}
+			if spec.Concurrency > model.DefaultLoginConcurrency {
+				http.Error(w, fmt.Sprintf("provisioning: concurrency can be at most %d", model.DefaultLoginConcurrency),
+					http.StatusBadRequest)
+				return
+			}
 			res.NewPool = true
-			res.PoolID, res.PoolName = fmt.Sprintf("pool-%d", time.Now().UnixNano()), name
+			res.PoolID, res.PoolName = newJobID("pool"), name
+			reg.acquire(res.PoolID)
 		}
+		res.seq = startSeq - 1 + spec.Count
 
-		jobID := fmt.Sprintf("prov-%d", time.Now().UnixNano())
+		jobID := newJobID("prov")
 		reg.Start(r.Context(), jobID, func(ctx context.Context) (*provisionResult, error) {
 			rows, summary := engine.Provision(ctx, spec, startSeq)
 			summary.PoolID, summary.PoolName = res.PoolID, res.PoolName

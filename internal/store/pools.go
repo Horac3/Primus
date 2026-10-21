@@ -72,10 +72,11 @@ func SaveCredentialPool(db *sql.DB, p model.CredentialPool) error {
 }
 
 // AppendCredentials adds rows after the pool's existing credentials and
-// merges maskFields into its masked-field list, in one transaction. The
+// merges maskFields into its masked-field list, in one transaction. seq raises
+// the pool's ProvisionedSeq (it is never lowered). The
 // pool's spec is otherwise untouched. It fails, changing nothing, when the
 // pool does not exist or the total would exceed model.MaxCredentialPoolRows.
-func AppendCredentials(db *sql.DB, poolID string, rows []model.Credential, maskFields []string) error {
+func AppendCredentials(db *sql.DB, poolID string, rows []model.Credential, maskFields []string, seq int) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("AppendCredentials: %w", err)
@@ -121,6 +122,7 @@ func AppendCredentials(db *sql.DB, poolID string, rows []model.Credential, maskF
 	for _, f := range append(append([]string{}, p.MaskedFields...), maskFields...) {
 		merged[f] = true
 	}
+	p.ProvisionedSeq = max(p.ProvisionedSeq, seq)
 	p.MaskedFields = make([]string, 0, len(merged))
 	for f := range merged {
 		p.MaskedFields = append(p.MaskedFields, f)

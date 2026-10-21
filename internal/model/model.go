@@ -239,6 +239,9 @@ type CredentialPool struct {
 	AllowReuse       bool      `json:"allow_reuse,omitempty"`
 	LoginConcurrency int       `json:"login_concurrency,omitempty"`
 	ReloginOn401     bool      `json:"relogin_on_401,omitempty"`
+	// ProvisionedSeq is the highest {{seq}} a provisioning job has attempted for
+	// this pool, so the next job starts after it even when some sign-ups failed.
+	ProvisionedSeq int `json:"provisioned_seq,omitempty"`
 }
 
 // LoginOutcome is one worker's login attempt. It carries no secrets: the

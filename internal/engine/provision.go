@@ -31,6 +31,8 @@ func GenerateSecret() string {
 	pick := func(set string) byte {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(set))))
 		if err != nil {
+			// crypto/rand does not fail on supported platforms; a broken entropy
+			// source must never yield a predictable password.
 			panic("crypto/rand unavailable: " + err.Error())
 		}
 		return set[n.Int64()]
@@ -46,6 +48,8 @@ func GenerateSecret() string {
 	for i := len(b) - 1; i > 0; i-- {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
 		if err != nil {
+			// crypto/rand does not fail on supported platforms; a broken entropy
+			// source must never yield a predictable password.
 			panic("crypto/rand unavailable: " + err.Error())
 		}
 		j := n.Int64()

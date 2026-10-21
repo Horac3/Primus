@@ -305,7 +305,7 @@ func TestAppendCredentials_AppendsAfterExistingRowsAndMergesMasking(t *testing.T
 		{"username": "carol", "password": "pw-carol", "api_token": "t-1"},
 		{"username": "dave", "password": "pw-dave", "api_token": "t-2"},
 	}
-	if err := store.AppendCredentials(db, pool.ID, rows, []string{"password", "api_token"}); err != nil {
+	if err := store.AppendCredentials(db, pool.ID, rows, []string{"password", "api_token"}, 0); err != nil {
 		t.Fatalf("AppendCredentials: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestAppendCredentials_RejectsOverTheRowCapAndLeavesPoolUntouched(t *testing
 	for i := range rows {
 		rows[i] = model.Credential{"username": "u", "password": "p"}
 	}
-	if err := store.AppendCredentials(db, pool.ID, rows, nil); err == nil {
+	if err := store.AppendCredentials(db, pool.ID, rows, nil, 0); err == nil {
 		t.Fatal("want an error when existing + new rows exceed the cap")
 	}
 	got, _ := store.GetCredentialPoolWithSecrets(db, pool.ID)
@@ -358,8 +358,28 @@ func TestAppendCredentials_RejectsOverTheRowCapAndLeavesPoolUntouched(t *testing
 
 func TestAppendCredentials_UnknownPool(t *testing.T) {
 	db := migratedDB(t)
-	err := store.AppendCredentials(db, "nope", []model.Credential{{"a": "b"}}, nil)
+	err := store.AppendCredentials(db, "nope", []model.Credential{{"a": "b"}}, nil, 0)
 	if err == nil {
 		t.Fatal("want an error for an unknown pool")
+	}
+}
+
+func TestAppendCredentials_RecordsHighestSeqAndNeverLowersIt(t *testing.T) {
+	db := migratedDB(t)
+	pool := samplePool()
+	if err := store.SaveCredentialPool(db, pool); err != nil {
+		t.Fatalf("SaveCredentialPool: %v", err)
+	}
+	row := []model.Credential{{"username": "x", "password": "p"}}
+
+	if err := store.AppendCredentials(db, pool.ID, row, nil, 7); err != nil {
+		t.Fatalf("AppendCredentials: %v", err)
+	}
+	if err := store.AppendCredentials(db, pool.ID, row, nil, 3); err != nil {
+		t.Fatalf("AppendCredentials: %v", err)
+	}
+	got, _ := store.GetCredentialPoolMasked(db, pool.ID)
+	if got.ProvisionedSeq != 7 {
+		t.Fatalf("ProvisionedSeq = %d, want 7 (highest seq attempted, never lowered)", got.ProvisionedSeq)
 	}
 }

@@ -33,11 +33,13 @@ type provTarget struct {
 	hits atomic.Int32
 	mu   sync.Mutex
 	pw   map[string]string // email -> password
+	// reject answers 409 for these emails.
+	reject map[string]bool
 }
 
 func newProvTarget(t *testing.T) *provTarget {
 	t.Helper()
-	p := &provTarget{pw: map[string]string{}}
+	p := &provTarget{pw: map[string]string{}, reject: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /signup", func(w http.ResponseWriter, r *http.Request) {
 		n := p.hits.Add(1)
@@ -45,6 +47,10 @@ func newProvTarget(t *testing.T) *provTarget {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		if p.blockAfter > 0 && n > p.blockAfter {
 			<-r.Context().Done()
+			return
+		}
+		if p.reject[in.Email] {
+			http.Error(w, `{"error":"exists"}`, http.StatusConflict)
 			return
 		}
 		p.mu.Lock()
@@ -268,7 +274,7 @@ func TestProvision_StopKeepsFinishedRowsAndCountsRestCancelled(t *testing.T) {
 	if err != nil || len(pool.Credentials) != 1 {
 		t.Fatalf("want the 1 finished account kept (err %v, pool %+v)", err, pool)
 	}
-	if !strings.Contains(body, "4 cancelled") || strings.Contains(body, "failed") && !strings.Contains(body, "0 failed") {
+	if !strings.Contains(body, "4 cancelled") || !strings.Contains(body, "0 failed") {
 		t.Errorf("stopped sign-ups must count as cancelled, not failed:\n%s", body)
 	}
 }
@@ -343,8 +349,6 @@ func TestProvision_SecretsNeverInLogsPagesOrExports(t *testing.T) {
 	done := pollProvision(t, mux, job, poolID)
 	fragment := getPath(t, mux, "/pools-fragment?id="+poolID).Body.String()
 	pool, _ := store.GetCredentialPoolWithSecrets(db, poolID)
-	exported, _ := json.Marshal(pool)
-	_ = exported // the stored spec holds no rows; secrets live only in the credentials table
 	var specOnly sql.NullString
 	if err := db.QueryRow(`SELECT payload FROM credential_pools WHERE id = ?`, poolID).Scan(&specOnly); err != nil {
 		t.Fatal(err)
@@ -359,5 +363,95 @@ func TestProvision_SecretsNeverInLogsPagesOrExports(t *testing.T) {
 				t.Errorf("%s contains a generated password", name)
 			}
 		}
+	}
+}
+
+func TestProvision_SecondJobForTheSamePoolIsRejectedWhileOneRuns(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	pt := newProvTarget(t)
+	id := importPool(t, db, mux, "email,password\nseed@x.test,pw\n")
+
+	hang := newProvTarget(t)
+	hang.blockAfter = 1 // the 2nd sign-up hangs, keeping job 1 running
+	job, poolID, _ := startProvision(t, mux, hang.form("3", url.Values{"existing_pool_id": {id}, "name": {""}}))
+	deadline := time.Now().Add(5 * time.Second)
+	for hang.hits.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	rr := postForm(t, mux, "/pools/provision", pt.form("2", url.Values{"existing_pool_id": {id}, "name": {""}}))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("second job status = %d, want 409: %s", rr.Code, rr.Body.String())
+	}
+	if pt.hits.Load() != 0 {
+		t.Fatalf("the rejected job sent %d sign-ups", pt.hits.Load())
+	}
+
+	postForm(t, mux, "/pools/provision/"+job+"/stop?pool="+poolID, nil)
+	pollProvision(t, mux, job, poolID)
+	// the pool is free again
+	job2, pool2, _ := startProvision(t, mux, pt.form("1", url.Values{"existing_pool_id": {id}, "name": {""}}))
+	pollProvision(t, mux, job2, pool2)
+}
+
+func TestProvision_SeqContinuesPastGapsLeftByFailedSignups(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	pt := newProvTarget(t)
+	pt.reject["u2@x.test"] = true
+
+	job, poolID, _ := startProvision(t, mux, pt.form("5", nil))
+	pollProvision(t, mux, job, poolID)
+	job2, pool2, _ := startProvision(t, mux, pt.form("2", url.Values{"existing_pool_id": {poolID}, "name": {""}}))
+	pollProvision(t, mux, job2, pool2)
+
+	pool, _ := store.GetCredentialPoolWithSecrets(db, poolID)
+	var emails []string
+	for _, c := range pool.Credentials {
+		emails = append(emails, c["email"])
+	}
+	want := "u1@x.test,u3@x.test,u4@x.test,u5@x.test,u6@x.test,u7@x.test"
+	if got := strings.Join(emails, ","); got != want {
+		t.Fatalf("emails = %s, want %s (seq 2 failed, so the next run must start at 6)", got, want)
+	}
+}
+
+func TestProvision_ConcurrencyAboveThePoolLimitIsRejected(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	pt := newProvTarget(t)
+	id := importPool(t, db, mux, "email,password\nseed@x.test,pw\n") // login concurrency 20
+
+	rr := postForm(t, mux, "/pools/provision", pt.form("2", url.Values{
+		"existing_pool_id": {id}, "name": {""}, "concurrency": {"21"},
+	}))
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "at most 20") {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body.String())
+	}
+	rr = postForm(t, mux, "/pools/provision", pt.form("2", url.Values{"concurrency": {"21"}}))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("new pool: status %d, want 400", rr.Code)
+	}
+	if pt.hits.Load() != 0 {
+		t.Fatalf("target received %d sign-ups, want 0", pt.hits.Load())
+	}
+}
+
+func TestProvision_ExtractedFieldCannotOverwriteAGeneratedField(t *testing.T) {
+	mux := web.NewServer(newTestDB(t))
+	pt := newProvTarget(t)
+	for name, field := range map[string]string{"existing field": "password", "bad name": "a b"} {
+		t.Run(name, func(t *testing.T) {
+			rr := postForm(t, mux, "/pools/provision", pt.form("1", url.Values{
+				"extract_field": {field}, "extract_path": {"id"},
+			}))
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+	if pt.hits.Load() != 0 {
+		t.Fatalf("target received %d sign-ups, want 0", pt.hits.Load())
 	}
 }
