@@ -49,7 +49,7 @@ All checks go through `.claude/kit/check.sh` (configured in `.claude/kit/command
 6. **Ollama is optional.** The core never depends on it; a rules analyzer is the fallback and the UI says which
    analyzer ran. Only aggregate summaries and findings go to a model: no bodies, credentials or tokens.
 7. **Credentials are secrets.** Masked in the UI after saving; never in logs, run JSON, exports, error messages or
-   analyzer payloads. Pools use pre-existing accounts only; Primus does not create accounts on a target.
+   analyzer payloads. Primus creates accounts only through an explicit provisioning action the user starts, never during a run (D-016).
 8. **Docker:** `CGO_ENABLED=0`, distroless `nonroot`, no shell in the final image, `/data` owned by uid 65532.
 
 ## Commit scopes
