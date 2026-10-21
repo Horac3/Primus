@@ -10,13 +10,13 @@ import (
 	"github.com/Horac3/Primus/internal/model"
 )
 
-// runHandle tracks one in-flight run: its cancellation func and, once
+// handle tracks one in-flight job: its cancellation func and, once
 // finished, its result. finish is guarded by once so a Stop racing natural
 // completion persists exactly one final state.
-type runHandle struct {
+type handle[T any] struct {
 	cancel     context.CancelFunc
 	done       chan struct{}
-	result     *model.Run
+	result     *T
 	finishedAt time.Time
 	once       sync.Once
 	snapshot   atomic.Pointer[[]model.Point]
@@ -24,22 +24,34 @@ type runHandle struct {
 	detail string
 }
 
-// Registry tracks in-flight runs for async execution + polling.
+// registry tracks in-flight jobs for async execution + polling.
 // Finished runs live in SQLite (via persist); the registry only holds
 // running ones plus results not yet polled.
-type Registry struct {
+type registry[T any] struct {
 	mu      sync.Mutex
-	runs    map[string]*runHandle
-	persist func(model.Run) error
+	runs    map[string]*handle[T]
+	persist func(T) error
 
 	// TTL bounds how long a finished-but-unpolled result stays available.
 	TTL time.Duration
 }
 
+// Registry tracks in-flight test runs; runHandle is one of its entries.
+type (
+	Registry  = registry[model.Run]
+	runHandle = handle[model.Run]
+)
+
 // NewRegistry builds a Registry that persists finished runs via persist.
 func NewRegistry(persist func(model.Run) error) *Registry {
-	return &Registry{
-		runs:    make(map[string]*runHandle),
+	return newRegistry(persist)
+}
+
+// newRegistry builds a registry for any async job type T (test runs,
+// provisioning), persisting each finished result via persist.
+func newRegistry[T any](persist func(T) error) *registry[T] {
+	return &registry[T]{
+		runs:    make(map[string]*handle[T]),
 		persist: persist,
 		TTL:     5 * time.Minute,
 	}
@@ -49,9 +61,9 @@ func NewRegistry(persist func(model.Run) error) *Registry {
 // immediately. The context is detached from parent cancellation (the HTTP
 // request context dies when the 202 response is written — the run must
 // outlive it); only Stop cancels it. Exactly one final state is persisted.
-func (r *Registry) Start(parent context.Context, id string, fn func(ctx context.Context) (model.Run, error)) {
+func (r *registry[T]) Start(parent context.Context, id string, fn func(ctx context.Context) (T, error)) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
-	h := &runHandle{cancel: cancel, done: make(chan struct{})}
+	h := &handle[T]{cancel: cancel, done: make(chan struct{})}
 
 	r.mu.Lock()
 	r.runs[id] = h
@@ -77,7 +89,7 @@ func (r *Registry) Start(parent context.Context, id string, fn func(ctx context.
 	}()
 }
 
-func (r *Registry) startWithHandle(parent context.Context, id string, h *runHandle, fn func(ctx context.Context, h *runHandle) (model.Run, error)) {
+func (r *registry[T]) startWithHandle(parent context.Context, id string, h *handle[T], fn func(ctx context.Context, h *handle[T]) (T, error)) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	h.cancel = cancel
 
@@ -105,7 +117,7 @@ func (r *Registry) startWithHandle(parent context.Context, id string, h *runHand
 	}()
 }
 
-func (r *Registry) finish(id string, h *runHandle, run model.Run, err error) {
+func (r *registry[T]) finish(id string, h *handle[T], run T, err error) {
 	h.once.Do(func() {
 		if err == nil {
 			if perr := r.persist(run); perr != nil {
@@ -121,7 +133,7 @@ func (r *Registry) finish(id string, h *runHandle, run model.Run, err error) {
 // Poll reports a run's state: "running" (result nil) or "done" (result set).
 // ok is false for unknown ids. A finished result is delivered once — the
 // entry is removed, so a second poll reports unknown.
-func (r *Registry) Poll(id string) (status string, result *model.Run, ok bool) {
+func (r *registry[T]) Poll(id string) (status string, result *T, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	h, found := r.runs[id]
@@ -138,7 +150,7 @@ func (r *Registry) Poll(id string) (status string, result *model.Run, ok bool) {
 }
 
 // Detail returns the running line for an in-flight run, or "".
-func (r *Registry) Detail(id string) string {
+func (r *registry[T]) Detail(id string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if h := r.runs[id]; h != nil {
@@ -147,7 +159,7 @@ func (r *Registry) Detail(id string) string {
 	return ""
 }
 
-func (r *Registry) Snapshot(id string) []model.Point {
+func (r *registry[T]) Snapshot(id string) []model.Point {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	h, found := r.runs[id]
@@ -164,7 +176,7 @@ func (r *Registry) Snapshot(id string) []model.Point {
 // Stop cancels an in-flight run. It reports false for unknown or already
 // finished ids. Cancellation racing natural completion is a harmless no-op:
 // finish is once-guarded, so at most one result is ever persisted.
-func (r *Registry) Stop(id string) bool {
+func (r *registry[T]) Stop(id string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	h, found := r.runs[id]
