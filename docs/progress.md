@@ -29,15 +29,14 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 10. LLM: query run history in natural language (FR-HIST-01..04, NFR-HIST-05, D-014).
 - [x] 12. Downloadable test reports and insights (FR-REPORT-01..05, D-015).
 - [x] 13. Credential provisioning (FR-PROV-01..07, D-016). Built, reviewed, committed; `scripts/race.sh` green. (`cd8f22d`..`bd616d5`)
-- [ ] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. Do it as the first
-  commit of whichever step next touches each file, not as a standalone big-bang change.
+- [x] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. (`b023f67`, `834c52a`, `ad970a0`)
 - [ ] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
   fallback, not in the binary or image. FR-META-01..04. Requirements written; not planned yet.
 
 ## Current step
-Step 14: Refactor: split `internal/web/web.go` by concern (engine.go split already done in b023f67)
-Requirements: none (pure refactor, no behaviour change)
-Status: in progress — engine.go done, web.go pending
+Step 11: Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`
+Requirements: FR-META-01..04
+Status: not started (requirements written, not planned)
 
 ## Handoff notes
 - Done (step 13, D-016 accepted, FR-PROV-01..07 written): `engine.Provision`/`GenerateSecret` (`internal/engine/provision.go`),
@@ -46,7 +45,9 @@ Status: in progress — engine.go done, web.go pending
   capped at the pool's login concurrency), panel form in `pools-panel.html`, docs in `docs/credential-pools.md`. Tests:
   `TestProvision_*` (engine and web), `TestGenerateSecret`, `TestAppendCredentials_*`. Concurrency and general reviews done and fixed.
 - Race run: `scripts/race.sh` green on all packages (2026-10-21), step 13 closed.
-- Next action: step 14, split `internal/web/web.go` by concern (handlers per area), no behaviour change; tests stay untouched.
+- Step 14 done: web.go split into web/templates/auth/requests/authoring/runs/insight/history/docs.go (`834c52a`), code
+  moved verbatim (only `// ----` divider comments dropped), full check.sh green, reviewed, architecture.md updated.
+- Next action: step 11, plan FR-META-01..04 (`tools/` commit-message assistant) in plan mode.
 - Uncommitted: `docs/progress.md` until the handoff commit.
 - Decisions: none beyond D-016 (rule 7 in CLAUDE.md and D-004 already updated).
 - Not done / known: Stop can leave an in-flight sign-up created on the target but unsaved (documented in the docs page);
@@ -56,7 +57,6 @@ Status: in progress — engine.go done, web.go pending
   breakpoint (sidebar 260px at 360px), no `:focus-visible` style, link/summary blue ~3.8:1. Never put `python`/`python3`
   in Bash here (Windows Store alias hangs). Set GOCACHE/GOTMPDIR/TMP to `D:/.gocache-primus`. CRLF-only gofmt hits on
   untouched files: `internal/importer/importer.go`, `importer_test.go`, `internal/web/registry_test.go`.
-- Step 14 partly done: engine.go split (b023f67); web.go split still pending.
 - Manual steps the user does by hand, never Claude: `git filter-repo`, interactive rebase, compose `depends_on`,
   Docker Hub push, deleting `AGENTS.md`/`.bobignore`/`primus-scaffold-plan.md`/root `web/`, repo-wide `eol` rule.
 
@@ -76,3 +76,4 @@ Status: in progress — engine.go done, web.go pending
 - 2026-10-21 step 12 done (`a39cfc6`..`9702601`)
 - 2026-10-21 step 13 partial (`cd8f22d`..`bd616d5`; race run pending)
 - 2026-10-21 step 13 done (race.sh green; `cd8f22d`..`bd616d5`)
+- 2026-10-21 step 14 done (`b023f67`, `834c52a`, `ad970a0`)
