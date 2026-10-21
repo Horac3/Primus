@@ -28,8 +28,7 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   fails with `SQLITE_BUSY`; a dropped `CompleteInsight` leaves the insight stuck on "Generating...". D-013.
 - [x] 10. LLM: query run history in natural language (FR-HIST-01..04, NFR-HIST-05, D-014).
 - [x] 12. Downloadable test reports and insights (FR-REPORT-01..05, D-015).
-- [ ] 13. Credential provisioning (sign-up before the run). Later and advanced; reuses the `Extraction` primitive.
-  Needs scoping and a `/decide`.
+- [~] 13. Credential provisioning (FR-PROV-01..07, D-016). Built, reviewed and committed; only `scripts/race.sh` is outstanding.
 - [ ] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. Do it as the first
   commit of whichever step next touches each file, not as a standalone big-bang change.
 - [ ] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
@@ -37,29 +36,26 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 
 ## Current step
 Step 13: Credential provisioning (sign-up before the run)
-Requirements: none yet (needs scoping and a `/decide`)
-Status: not started (step 11 "meta" is deliberately last; its requirements FR-META-01..04 are written)
+Requirements: FR-PROV-01..07
+Status: in progress — all behaviours done and committed; race run pending (Docker was down)
 
 ## Handoff notes
-- Done (step 12): `internal/web/report.go` serves `GET /runs/{id}/report.html|report.md|series.csv` (attachments,
-  404 on unknown run); `redactURLs` (text-based, case-insensitive) cuts URLs in error causes to scheme://host/path on
-  the run page, result card, login summary and exports. Tests: `TestRedactURLs`, `TestErrorCausesAreRedactedOnRunPageAndCard`,
-  `TestSeriesCSV`, `TestMarkdownReport`, `TestHTMLReport` (incl. leak sweep). Docs: `docs/reports.md`. Review fixes applied.
-- Next action: step 13 needs scoping with the user and a `/decide` before planning. Step 11 is not to be planned yet.
-- Uncommitted: `docs/progress.md`, `docs/architecture.md` (report.go line), until the handoff commit.
-- Decisions: D-015 (reports rendered on request, redacted at render time). CLAUDE.md now says Claude commits green
-  cycles itself (user decision); the Skill tool cannot run `/commit`, so use git directly.
-- Not done: `scripts/race.sh` was not run (no goroutine code changed; CI runs it). No `ui-checker` look at the
-  download links. Review leftovers (minor, skipped): store errors all map to 404; Markdown insight text and pool name
-  are not Markdown-escaped; HTML insight text collapses newlines; rate section gates differ (HTML TargetRate vs MD mode);
-  no tests for rate mode, login rows or `mdCell` escaping in exports.
-- Watch out: ui-checker had no Playwright, so the Ask form was checked from HTML/CSS only (no screenshots). The
-  "not understood" note shows beside "No runs match" on an empty DB (left as is). Global button contrast ~3.9:1
-  (pre-existing). Never put `python`/`python3` in Bash here: the Windows Store alias hangs the shell.
-  Other notes: C: had ~3.7GB free after the user cleaned up; Docker Desktop dies when C: fills. Tests OOM with the Go
-  cache on C:; set GOCACHE/GOTMPDIR/TMP to `D:/.gocache-primus`. CRLF-only gofmt hits on untouched files:
-  `internal/importer/importer.go`, `importer_test.go`, `internal/web/registry.go`, `registry_test.go`.
-  No `ui-checker` screenshot of the rate fields yet. Rate docs live in `docs/load.md` (docs_test pins the page list).
+- Done (step 13, D-016 accepted, FR-PROV-01..07 written): `engine.Provision`/`GenerateSecret` (`internal/engine/provision.go`),
+  `store.AppendCredentials` + `CredentialPool.ProvisionedSeq`, generic `registry[T]` (Registry/runHandle kept as aliases),
+  `internal/web/provision.go` (POST /pools/provision, GET .../{id}/status, POST .../{id}/stop, one job per pool, concurrency
+  capped at the pool's login concurrency), panel form in `pools-panel.html`, docs in `docs/credential-pools.md`. Tests:
+  `TestProvision_*` (engine and web), `TestGenerateSecret`, `TestAppendCredentials_*`. Concurrency and general reviews done and fixed.
+- Next action: run `scripts/race.sh` once Docker Desktop is up (it was down all session; step stays `[~]` until it is green).
+  Fix anything it reports in `registry.go` (a sweep race is already fixed in 1652c25) or `provision.go`, then mark step 13 `[x]`.
+- Uncommitted: `docs/progress.md` until the handoff commit.
+- Decisions: none beyond D-016 (rule 7 in CLAUDE.md and D-004 already updated).
+- Not done / known: Stop can leave an in-flight sign-up created on the target but unsaved (documented in the docs page);
+  `AppendCredentials` uses a deferred tx (BEGIN IMMEDIATE would avoid SQLITE_BUSY_SNAPSHOT); Stop racing the 1s poll can
+  hide the summary; no test for two overlapping registry Start calls (only visible under -race).
+- Watch out: `ui-checker` had no Playwright (no screenshots). Pre-existing global UI gaps, not fixed: no mobile `@media`
+  breakpoint (sidebar 260px at 360px), no `:focus-visible` style, link/summary blue ~3.8:1. Never put `python`/`python3`
+  in Bash here (Windows Store alias hangs). Set GOCACHE/GOTMPDIR/TMP to `D:/.gocache-primus`. CRLF-only gofmt hits on
+  untouched files: `internal/importer/importer.go`, `importer_test.go`, `internal/web/registry_test.go`.
 - Step 14 partly done: engine.go split (b023f67); web.go split still pending.
 - Manual steps the user does by hand, never Claude: `git filter-repo`, interactive rebase, compose `depends_on`,
   Docker Hub push, deleting `AGENTS.md`/`.bobignore`/`primus-scaffold-plan.md`/root `web/`, repo-wide `eol` rule.
@@ -78,3 +74,4 @@ Status: not started (step 11 "meta" is deliberately last; its requirements FR-ME
 - 2026-10-21 step 10 done (`6d93009`..`3304a33`)
 - 2026-10-21 step 11 requirements written, step moved last, architecture remapped (`3ed6303`)
 - 2026-10-21 step 12 done (`a39cfc6`..`9702601`)
+- 2026-10-21 step 13 partial (`cd8f22d`..`bd616d5`; race run pending)
