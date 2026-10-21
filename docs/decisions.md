@@ -241,3 +241,11 @@ Consequences:
 - The seed targets a third-party service run by someone else: modest configs, documented in `docs/collections.md`.
 - JSONPlaceholder has no auth, so the seed cannot demonstrate auth-probe or credential pools.
 Revisit if: users need to move endpoints between collections, share or export collections, or want an authenticated demo target.
+
+## D-018: Seeding runs at server start, never overwrites, and leaves moved rows alone
+Context: C2 needed the built-in collection to appear without clobbering user edits or reappearing after a delete.
+Decision: `seed.Ensure` runs only in server start (not `primus run`), so existing installs also get the collection on upgrade.
+`SeedCollection` is one immediate transaction: skip if the seed ID exists, skip if tombstoned (unless restoring), fail with
+`ErrDuplicateName` if a user collection holds the name. Seeded rows have fixed IDs (`seed-jp-<slug>`); on restore a row that already
+holds such an ID (the user moved it to another collection) is left where it is. The restore handler takes no `scopeGuard`: it only inserts.
+Revisit if: seed versions need upgrading in place, or more than one built-in collection ships.

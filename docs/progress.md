@@ -33,31 +33,29 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
   fallback, not in the binary or image. FR-META-01..04. (`f7f8694`..`b0b87cb`)
 - [x] C1. Collections: schema, migration, create/rename/base URL, delete collection, clear history — FR-COLL-02..06 (D-017) (`63d529a`..`7bd3fb0`)
-- [ ] C2. JSONPlaceholder seed, seeder with tombstone, Restore examples, `docs/collections.md` — FR-SEED-01..05
+- [x] C2. JSONPlaceholder seed, seeder with tombstone, Restore examples, `docs/collections.md` — FR-SEED-01..05
 - [ ] C3. Grouped sidebar, collection page, import into a collection, run all — FR-COLL-01, 07, 08, FR-REP-03
 - [ ] C4. Per-endpoint report with trend table and the key — FR-REP-01, 02
 - [ ] C5. Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison — FR-INS-01..03
 
 ## Current step
-Step C2: JSONPlaceholder seed, seeder with tombstone, Restore examples, `docs/collections.md`
-Requirements: FR-SEED-01..05 (and the restore half of FR-COLL-06)
-Status: not started (C1 done)
+Step C3: Grouped sidebar, collection page, import into a collection, run all
+Requirements: FR-COLL-01, 07, 08, FR-REP-03
+Status: not started (C2 done)
 
 ## Handoff notes
-- Done (C1, FR-COLL-02..06, `63d529a`..`7bd3fb0`): collections + seed_tombstones tables, guarded `ALTER requests ADD collection_id`, "My endpoints"
-  migration (`TestMigrate_*`); collection CRUD/validation; `model.ExpandBaseURL`/`store.ResolveURL` used by web probe/run and CLI;
-  `DeleteCollection`/`ClearHistory` under `BEGIN IMMEDIATE` (`inImmediateTx`); registry `ActiveRequestIDs` + `scopeGuard`
-  (run start, import, delete, clear); Collections panel (`/collections`, `/history/clear`), collection select, clear buttons; docs in load/cli/history.md.
-  Reviewed (reviewer + concurrency-reviewer), fixes committed. check.sh and `scripts/race.sh` green.
-- Next action: C2. Create `internal/seed` (embedded JSON, ~20 JSONPlaceholder endpoints with `{{base_url}}` URLs, saved configs, assertions, notes).
-  Seeder sets `collections.seed_id/seed_version`, skips when `store.Tombstoned(db, seedID)` or the collection exists; "Restore examples" must clear the tombstone and
-  re-seed ("already present" if it exists). Add `docs/collections.md` to the embed list AND `order` in `docs/docs.go`, plus the docs test list.
-- Uncommitted: none, except untracked stray `internal/store/collections.go.new` (my abandoned draft; user must delete it by hand).
-- Decisions: tombstone written by `DeleteCollection` in C1 (restore is C2); base URL rejects userinfo/query/fragment; `{{base_url}}` only at URL start.
-- Watch out: ui-checker could not run (no Playwright); collections panel/new controls are NOT visually checked, and there is still no mobile breakpoint or `:focus-visible`.
-  Not fixed (nits): `StartInsight` after `GetRun` is not under the guard (clear can leave an orphan insight); collection row counts go stale after a row-level clear;
-  import-vs-delete race test is only a tripwire (passed before the guard). Sidebar is still a flat list (C3). CLI runs are invisible to the server's active-run check (documented).
-  Remaining spec-vs-code notes for C3..C5: run has no endpoint field (join via test_configs, rule needed for several configs); `importer` returns no spec title (FR-COLL-08).
+- Done (C2, FR-SEED-01..05, FR-COLL-06 restore, `a036b32`..`8884eba`): `Notes` on RequestDefinition (`TestSaveAndGetRequestDefinition_KeepsNotes`);
+  `store.SeedCollection` in one immediate tx (`TestSeedCollection_*`, incl. moved-endpoint restore); `internal/seed` (21 endpoints, `TestLoad_*`, `TestEnsure_*`);
+  `seed.Ensure` at server start only; `POST /collections/restore` + button (`TestRestoreExamples_*`); Notes textarea in builder (`notes_test.go`); `docs/collections.md`.
+  Reviewed; 2 blocking findings fixed. check.sh and `scripts/race.sh` green before the review fixes (fixes touch no goroutine code).
+- Next action: C3. Grouped sidebar (by collection), collection page, import into a collection, run all (FR-COLL-01, 07, 08, FR-REP-03). Read those IDs first.
+- Uncommitted: none, except untracked stray `internal/store/collections.go.new` (user must delete it by hand).
+- Decisions: `Ensure` also seeds existing installs on upgrade (spec says fresh install); restore handler takes no `scopeGuard` (insert-only, serialized by the immediate tx);
+  seeded rows keep fixed IDs `seed-jp-<slug>`; on restore an existing row with a seed ID (user moved it) is left where it is.
+- Watch out: the builder does NOT load saved test configs (form defaults 5/50, no assertions), so seeded configs only matter for "run all" (C3, FR-COLL-07 must use them);
+  docs/collections.md says so. Commit `ec44a4c` uses scope `seed`, not in the CLAUDE.md list (history not rewritten). CLAUDE.md layout line and docs/architecture.md lack `internal/seed`.
+  Collections panel Restore button not visually checked (no Playwright). Earlier C1 nits still open (see git log `ebc704c`).
+- Run /remap: new package `internal/seed`.
 ## Log
 - 2026-10-21 claude-kit 1.4.0 installed into Primus on `ft/dev`; roadmap rebuilt from the repo state at `6e20275`
 - 2026-10-21 setup verified: `commands.env` created, `check.sh all` PASS, race run blocked (Docker down); roadmap reset to steps 4–14
@@ -77,3 +75,4 @@ Status: not started (C1 done)
 - 2026-10-21 step 14 done (`b023f67`, `834c52a`, `ad970a0`)
 - 2026-10-21 step 11 done (`f7f8694`..`b0b87cb`)
 - 2026-10-21 step C1 done (`63d529a`..`7bd3fb0`)
+- 2026-10-21 step C2 done (`a036b32`..`8884eba`)
