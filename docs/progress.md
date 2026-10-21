@@ -7,9 +7,9 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 1. Credential pools: types, storage, login phase, UI, smoke test (`848a90c`..`16afb8c`)
 - [x] 2. Fix: a run with zero completed requests never passes (`3bc3962`)
 - [x] 3. Fix: cancelled in-flight requests counted separately from errors (`64b7c95`, `6e20275`)
-- [ ] 4. Fix: flaky `TestProbe_SuccessfulTarget` (`LatencyMs <= 0` at `internal/engine/engine_phase4_test.go:152`).
+- [x] 4. Fix: flaky `TestProbe_SuccessfulTarget` (`LatencyMs <= 0` at `internal/engine/engine_phase4_test.go:152`).
   Reproduce at `-count=50`, assert `< 0` instead, no sleeps, and look for the same `> 0`-on-a-measured-duration
-  pattern elsewhere. Spec: `agent_instructions/fix-verdict-and-flaky-probe.md` (Fix 2).
+  pattern elsewhere. Spec: `agent_instructions/fix-verdict-and-flaky-probe.md` (Fix 2). (`d1326cf`)
 - [ ] 5. CI: add a test job (build, vet, test, then `scripts/race.sh`-equivalent `go test -race`) that runs on pushes
   and pull requests, and make the Docker publish job depend on it. NFR-CI-01.
 - [ ] 6. Per-field credential masking. FR-CRED-01..04. Spec: `agent_instructions/fix-credential-field-masking.md`.
@@ -33,28 +33,22 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   commit of whichever step next touches each file, not as a standalone big-bang change.
 
 ## Current step
-Step 4: Fix flaky `TestProbe_SuccessfulTarget`
-Requirements: —
+Step 5: CI test job gating the Docker publish
+Requirements: NFR-CI-01
 Status: not started
 
 ## Handoff notes
-- Next action: run `/next`. Reproduce with `go test ./internal/engine -run TestProbe_SuccessfulTarget -count=50`,
-  then change the assertion at `internal/engine/engine_phase4_test.go:152` from `LatencyMs <= 0` to `< 0`.
-  A localhost probe can measure 0 ms. No sleeps in the test server. Search other tests for `> 0` on measured durations.
-- Setup check (2026-10-21), uncommitted:
-  - `.claude/kit/commands.env` did not exist (the installer listed it, but it was never written to disk). Created it:
-    typecheck `go build ./...`, lint `go vet ./...` + gofmt check, test `go test ./...`. golangci-lint is not installed.
-  - `.gitignore`: `*.env` ignored `commands.env`; added `!.claude/kit/commands.env` so it can be committed.
-  - `core.autocrlf=true` checks out 6 Go files as CRLF while the index is LF, so plain `gofmt -l .` gave a false lint
-    FAIL. The lint command strips CR before comparing, so it reports what CI sees. No source files were touched.
-  - `check.sh all`: VERDICT PASS (typecheck, lint, test; 10 packages ok). Local Go is 1.27.1, not 1.25.
-  - `scripts/race.sh`: NOT run. Docker Desktop was not running (`dockerDesktopLinuxEngine` pipe missing). Re-run it with
-    Docker up; record any race as a new step rather than fixing it inline.
-  - Hooks: `.claude/settings.json` registers `guard-bash.sh`, `guard-files.sh` (PreToolUse) and `session-context.sh`
-    (SessionStart), and each script behaves correctly when run by hand. No SessionStart context showed up in that
-    session, so confirm with `/hooks` before relying on them.
-  - `docs/docs.go`: build passes; the eight embedded files all exist and match `order`. No `fix(docs)` needed.
-  - `.claude/kit/manifest` says `pm=pnpm frontend=1`, a likely misdetection for this Go + htmx repo. Not changed.
+- Done: step 4. `TestProbe_SuccessfulTarget` now asserts `LatencyMs >= 0` (whole-ms truncation; localhost reads 0).
+  Was 48/50 failing at `-count=50`, now 50/50 pass. No other `> 0` assertions on measured durations exist.
+  Setup files committed (`d2bffd0`); `docs/internal/` gitignored (`c954ab5`); the user deleted the old root
+  `settings.json`, its three hooks and `.claude/commands/`.
+- Next action: run `/next` for step 5. Read the existing workflow under `.github/workflows/` and NFR-CI-01 first.
+- Uncommitted: none.
+- Decisions: none.
+- `scripts/race.sh` still never run (Docker was down at setup). Step 5's CI race job will cover it; run it locally too.
+- Hooks: confirm with `/hooks` that `.claude/settings.json` hooks load (SessionStart context did show this session).
+- `.claude/kit/manifest` says `pm=pnpm frontend=1`, a likely misdetection for this Go + htmx repo. Not changed.
+- Lint strips CR before gofmt because `core.autocrlf=true` checks Go files out as CRLF. Local Go is 1.27.1, not 1.25.
 - Watch out: `internal/engine/pool.go` has shown CRLF-only diffs on the user's Windows machine. The kit's
   `.gitattributes` forces LF for `.claude/**/*.sh` only; do not add a repo-wide `eol` rule without asking.
 - Manual steps the user does by hand, never Claude: `git filter-repo` purge of `agent_instructions/` from history,
@@ -64,3 +58,4 @@ Status: not started
 ## Log
 - 2026-10-21 claude-kit 1.4.0 installed into Primus on `ft/dev`; roadmap rebuilt from the repo state at `6e20275`
 - 2026-10-21 setup verified: `commands.env` created, `check.sh all` PASS, race run blocked (Docker down); roadmap reset to steps 4–14
+- 2026-10-21 step 4 done (`d1326cf`)
