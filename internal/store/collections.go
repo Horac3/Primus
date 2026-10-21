@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -65,7 +66,9 @@ func columnExists(db *sql.DB, table, column string) (bool, error) {
 	return false, rows.Err()
 }
 
-// ensureDefaultCollection creates "My endpoints" if it does not exist and returns its ID.
+// ensureDefaultCollection creates "My endpoints" if it does not exist and returns the ID of the
+// collection to use. The insert also yields to the unique name index, so when the user made their own
+// collection with that name after deleting the default one, that collection is returned instead.
 func ensureDefaultCollection(db *sql.DB) (string, error) {
 	_, err := db.Exec(
 		`INSERT OR IGNORE INTO collections (id, name, created_at) VALUES (?,?,?)`,
@@ -74,7 +77,13 @@ func ensureDefaultCollection(db *sql.DB) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ensure default collection: %w", err)
 	}
-	return DefaultCollectionID, nil
+	var id string
+	err = db.QueryRow(`SELECT id FROM collections WHERE id = ? OR name = ? COLLATE NOCASE ORDER BY id = ? DESC LIMIT 1`,
+		DefaultCollectionID, DefaultCollectionName, DefaultCollectionID).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("ensure default collection: %w", err)
+	}
+	return id, nil
 }
 
 // ListCollections returns all collections ordered by name.
@@ -111,7 +120,9 @@ func cleanCollectionInput(name, baseURL string) (string, string, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL != "" {
 		u, err := url.Parse(baseURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		// Userinfo would be a credential shown in the panel; a query or fragment breaks the "/path" join.
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+			u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(baseURL, "#") {
 			return "", "", ErrInvalidBaseURL
 		}
 	}
@@ -310,28 +321,73 @@ func clearHistory(q queryer, s Scope) (int, error) {
 // ClearHistory removes runs and insights in scope in one transaction and returns how many runs went.
 // Endpoints and saved test configs remain.
 func ClearHistory(db *sql.DB, s Scope) (int, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("ClearHistory: %w", err)
-	}
-	defer tx.Rollback()
-	n, err := clearHistory(tx, s)
+	var n int
+	err := inImmediateTx(db, func(q queryer) (err error) {
+		n, err = clearHistory(q, s)
+		return err
+	})
 	if err != nil {
 		return 0, err
 	}
-	return n, tx.Commit()
+	return n, nil
+}
+
+// connQ lets a pinned *sql.Conn satisfy queryer.
+type connQ struct{ c *sql.Conn }
+
+func (q connQ) Query(query string, args ...any) (*sql.Rows, error) {
+	return q.c.QueryContext(context.Background(), query, args...)
+}
+
+func (q connQ) QueryRow(query string, args ...any) *sql.Row {
+	return q.c.QueryRowContext(context.Background(), query, args...)
+}
+
+func (q connQ) Exec(query string, args ...any) (sql.Result, error) {
+	return q.c.ExecContext(context.Background(), query, args...)
+}
+
+// inImmediateTx runs fn in a transaction that takes the write lock up front (BEGIN IMMEDIATE). A
+// deferred transaction that reads first fails at once with SQLITE_BUSY when another connection commits
+// before its first write, and busy_timeout does not apply to that upgrade; waiting for the lock at BEGIN
+// does honour it. Used by the delete and clear paths, which read counts before they write.
+func inImmediateTx(db *sql.DB, fn func(q queryer) error) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	if err := fn(connQ{conn}); err != nil {
+		conn.ExecContext(ctx, `ROLLBACK`)
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		conn.ExecContext(ctx, `ROLLBACK`)
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // DeleteCollection removes a collection with its endpoints, their configs, runs and insights in one
 // transaction, and returns what went. Deleting a built-in collection records a tombstone so the
 // seeder does not bring it back. Credential pools are not per-endpoint and are untouched.
 func DeleteCollection(db *sql.DB, id string) (Counts, error) {
-	tx, err := db.Begin()
+	var counts Counts
+	err := inImmediateTx(db, func(q queryer) (err error) {
+		counts, err = deleteCollection(q, id)
+		return err
+	})
 	if err != nil {
-		return Counts{}, fmt.Errorf("DeleteCollection: %w", err)
+		return Counts{}, err
 	}
-	defer tx.Rollback()
+	return counts, nil
+}
 
+func deleteCollection(tx queryer, id string) (Counts, error) {
 	var seedID string
 	if err := tx.QueryRow(`SELECT seed_id FROM collections WHERE id = ?`, id).Scan(&seedID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -363,7 +419,7 @@ func DeleteCollection(db *sql.DB, id string) (Counts, error) {
 			return Counts{}, fmt.Errorf("write tombstone: %w", err)
 		}
 	}
-	return counts, tx.Commit()
+	return counts, nil
 }
 
 // Tombstoned reports whether the user deleted the built-in collection with this seed ID.

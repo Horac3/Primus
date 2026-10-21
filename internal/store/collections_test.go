@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/Horac3/Primus/internal/model"
@@ -20,6 +22,7 @@ func legacyDB(t *testing.T) *sql.DB {
 		`CREATE TABLE requests (id TEXT PRIMARY KEY, name TEXT NOT NULL, method TEXT NOT NULL, url_template TEXT NOT NULL, payload TEXT NOT NULL)`,
 		`CREATE TABLE test_configs (id TEXT PRIMARY KEY, request_id TEXT NOT NULL, payload TEXT NOT NULL)`,
 		`CREATE TABLE runs (id TEXT PRIMARY KEY, test_config_id TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT NOT NULL, payload TEXT NOT NULL)`,
+		`CREATE TABLE insights (run_id TEXT PRIMARY KEY, analyzer TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', status TEXT NOT NULL CHECK (status IN ('pending', 'done', 'failed')), text TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
 	} {
 		if _, err := db.Exec(s); err != nil {
 			t.Fatalf("legacy schema: %v", err)
@@ -33,6 +36,9 @@ func legacyDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO runs VALUES ('run1','c1','2026-01-01T00:00:00Z','2026-01-01T00:00:01Z','{"id":"run1","test_config_id":"c1"}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO insights VALUES ('run1','rules','','done','ok','','2026-01-01T00:00:02Z')`); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -64,6 +70,37 @@ func TestMigrate_MovesLegacyEndpointsIntoMyEndpoints(t *testing.T) {
 	}
 	if _, err := store.GetTestConfig(db, "c1"); err != nil {
 		t.Errorf("config no longer reachable: %v", err)
+	}
+	if _, err := store.GetInsight(db, "run1"); err != nil {
+		t.Errorf("insight no longer reachable: %v", err)
+	}
+}
+
+func TestSaveRequestDefinition_DefaultCollectionNameClash(t *testing.T) {
+	// The user deletes "My endpoints" and creates their own collection with the same name; an
+	// endpoint saved without a collection must land in a collection that exists.
+	db := migrated(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "first", Name: "first", Method: "GET", URLTemplate: "http://x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteCollection(db, store.DefaultCollectionID); err != nil {
+		t.Fatal(err)
+	}
+	own, err := store.CreateCollection(db, "my endpoints", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "second", Name: "second", Method: "GET", URLTemplate: "http://x"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := store.GetRequestDefinition(db, "second")
+	if got.CollectionID != own.ID {
+		t.Errorf("CollectionID = %q, want the user's collection %q", got.CollectionID, own.ID)
+	}
+	if _, err := store.GetCollection(db, got.CollectionID); err != nil {
+		t.Errorf("endpoint filed under a collection that does not exist: %v", err)
 	}
 }
 
@@ -153,7 +190,7 @@ func TestCreateCollection_RejectsBadInput(t *testing.T) {
 			}
 		})
 	}
-	for _, base := range []string{"ftp://x", "not a url", "/relative", "http://"} {
+	for _, base := range []string{"ftp://x", "not a url", "/relative", "http://", "https://user:pass@host", "https://host?k=v", "https://host/#frag"} {
 		t.Run("base "+base, func(t *testing.T) {
 			if _, err := store.CreateCollection(db, "Other-"+base, base); !errors.Is(err, store.ErrInvalidBaseURL) {
 				t.Errorf("err = %v, want ErrInvalidBaseURL", err)
@@ -439,4 +476,45 @@ func TestScopeRequestIDs(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("ids = %v, want a1 and a2", got)
 	}
+}
+
+// A run finishing elsewhere commits while a delete or clear is between its reads and its first write.
+// With a deferred transaction SQLite fails that upgrade at once (SQLITE_BUSY_SNAPSHOT) instead of waiting.
+func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
+	f := newFixture(t) // b1 has config cfg-b1; the writer keeps adding runs to it
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := store.SaveRun(f.db, model.Run{ID: fmt.Sprintf("w-%d", i), TestConfigID: "cfg-b1"}); err != nil {
+				t.Errorf("writer SaveRun: %v", err)
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 60; i++ {
+		col, err := store.CreateCollection(f.db, fmt.Sprintf("Temp%d", i), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveRequestDefinition(f.db, model.RequestDefinition{ID: fmt.Sprintf("t%d", i), Name: "t", Method: "GET", URLTemplate: "http://x", CollectionID: col.ID}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.DeleteCollection(f.db, col.ID); err != nil {
+			t.Errorf("DeleteCollection #%d: %v", i, err)
+		}
+		if _, err := store.ClearHistory(f.db, store.Scope{Kind: store.ScopeEndpoint, ID: "a1"}); err != nil {
+			t.Errorf("ClearHistory #%d: %v", i, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
 }
