@@ -10,7 +10,7 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 4. Fix: flaky `TestProbe_SuccessfulTarget` (`LatencyMs <= 0` at `internal/engine/engine_phase4_test.go:152`).
   Reproduce at `-count=50`, assert `< 0` instead, no sleeps, and look for the same `> 0`-on-a-measured-duration
   pattern elsewhere. Spec: `agent_instructions/fix-verdict-and-flaky-probe.md` (Fix 2). (`d1326cf`)
-- [ ] 5. CI: add a test job (build, vet, test, then `scripts/race.sh`-equivalent `go test -race`) that runs on pushes
+- [x] 5. CI: add a test job (build, vet, test, then `scripts/race.sh`-equivalent `go test -race`) that runs on pushes
   and pull requests, and make the Docker publish job depend on it. NFR-CI-01.
 - [ ] 6. Per-field credential masking. FR-CRED-01..04. Spec: `agent_instructions/fix-credential-field-masking.md`.
 - [ ] 7. Docs and UI follow-ups from the setup check (README auth-probe wording was OK and is excluded):
@@ -33,19 +33,20 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   commit of whichever step next touches each file, not as a standalone big-bang change.
 
 ## Current step
-Step 5: CI test job gating the Docker publish
-Requirements: NFR-CI-01
+Step 6: Per-field credential masking
+Requirements: FR-CRED-01..04
 Status: not started
 
 ## Handoff notes
-- Done: step 4. `TestProbe_SuccessfulTarget` now asserts `LatencyMs >= 0` (whole-ms truncation; localhost reads 0).
-  Was 48/50 failing at `-count=50`, now 50/50 pass. No other `> 0` assertions on measured durations exist.
-  Setup files committed (`d2bffd0`); `docs/internal/` gitignored (`c954ab5`); the user deleted the old root
-  `settings.json`, its three hooks and `.claude/commands/`.
-- Next action: run `/next` for step 5. Read the existing workflow under `.github/workflows/` and NFR-CI-01 first.
+- Done: step 5 (`09f025e`). `docker-publish.yml` is now workflow `CI`: a `test` job (build, vet, gofmt, test, `-race`,
+  Go 1.25.x, 20 min timeout) on every push/PR; `publish` has `needs: test` and runs only on master/main/v* pushes.
+  Same file kept so the beta-tag run counter continues. CONTRIBUTING.md and architecture.md updated.
+- Next action: `/next` for step 6. Spec: `agent_instructions/fix-credential-field-masking.md`.
 - Uncommitted: none.
 - Decisions: none.
-- `scripts/race.sh` still never run (Docker was down at setup). Step 5's CI race job will cover it; run it locally too.
+- Unverified: CI has not run on GitHub yet. The user should push `ft/dev` and confirm `test` is green and `publish` skipped.
+- Reviewer items not done (by choice): in-repo PRs run twice (push + pull_request); plain test step kept before race step.
+- `scripts/race.sh` still never run locally (Docker Desktop down); CI's race step is its first real run.
 - Hooks: confirm with `/hooks` that `.claude/settings.json` hooks load (SessionStart context did show this session).
 - `.claude/kit/manifest` says `pm=pnpm frontend=1`, a likely misdetection for this Go + htmx repo. Not changed.
 - Lint strips CR before gofmt because `core.autocrlf=true` checks Go files out as CRLF. Local Go is 1.27.1, not 1.25.
@@ -59,3 +60,4 @@ Status: not started
 - 2026-10-21 claude-kit 1.4.0 installed into Primus on `ft/dev`; roadmap rebuilt from the repo state at `6e20275`
 - 2026-10-21 setup verified: `commands.env` created, `check.sh all` PASS, race run blocked (Docker down); roadmap reset to steps 4–14
 - 2026-10-21 step 4 done (`d1326cf`)
+- 2026-10-21 step 5 done (`09f025e`)
