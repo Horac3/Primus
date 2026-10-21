@@ -2,9 +2,11 @@ package engine_test
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,18 +35,25 @@ func TestValidateTestConfig_MaxRate(t *testing.T) {
 		name    string
 		mode    model.Mode
 		rate    float64
+		burst   *model.BurstPattern
 		wantErr string
 	}{
-		{"probe with cap", model.ModeAuthProbe, 5, ""},
-		{"probe without cap", model.ModeAuthProbe, 0, ""},
-		{"negative", model.ModeAuthProbe, -1, "max_rate"},
-		{"load with cap", model.ModeLoad, 5, "max_rate"},
-		{"burst with cap", model.ModeBurst, 5, "max_rate"},
+		{"probe with cap", model.ModeAuthProbe, 5, nil, ""},
+		{"probe without cap", model.ModeAuthProbe, 0, nil, ""},
+		{"smallest cap", model.ModeAuthProbe, 0.001, nil, ""},
+		{"negative", model.ModeAuthProbe, -1, nil, "max_rate"},
+		{"below minimum", model.ModeAuthProbe, 1e-12, nil, "max_rate"},
+		{"NaN", model.ModeAuthProbe, math.NaN(), nil, "max_rate"},
+		{"infinite", model.ModeAuthProbe, math.Inf(1), nil, "max_rate"},
+		{"load with cap", model.ModeLoad, 5, nil, "max_rate"},
+		{"burst with cap", model.ModeBurst, 5, nil, "max_rate"},
+		{"probe with cap and burst pattern", model.ModeAuthProbe, 5, &model.BurstPattern{Count: 2, Idle: 10}, "burst"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := probeConfig(10, tc.rate)
 			cfg.Mode = tc.mode
+			cfg.BurstPattern = tc.burst
 			err := engine.ValidateTestConfig(cfg)
 			if tc.wantErr == "" {
 				if err != nil {
@@ -59,31 +68,82 @@ func TestValidateTestConfig_MaxRate(t *testing.T) {
 	}
 }
 
-func TestRun_MaxRateSpacesAttempts(t *testing.T) {
-	var arrivals atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		arrivals.Add(1)
+// arrivalTarget records when each request arrives. The first hold
+// requests sleep for holdFor, simulating a slow target.
+type arrivalTarget struct {
+	srv   *httptest.Server
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func newArrivalTarget(t *testing.T, hold int, holdFor time.Duration) *arrivalTarget {
+	t.Helper()
+	at := &arrivalTarget{}
+	at.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		at.mu.Lock()
+		at.times = append(at.times, time.Now())
+		n := len(at.times)
+		at.mu.Unlock()
+		if n <= hold {
+			time.Sleep(holdFor)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer srv.Close()
+	t.Cleanup(at.srv.Close)
+	return at
+}
 
-	req := model.RequestDefinition{ID: "req-probe", Method: http.MethodGet, URLTemplate: srv.URL}
+func (at *arrivalTarget) arrivals() []time.Time {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	return append([]time.Time(nil), at.times...)
+}
+
+// assertMinGap fails when two consecutive arrivals are closer than min.
+func assertMinGap(t *testing.T, times []time.Time, min time.Duration) {
+	t.Helper()
+	for i := 1; i < len(times); i++ {
+		if gap := times[i].Sub(times[i-1]); gap < min {
+			t.Errorf("attempts %d and %d arrived %s apart, want at least %s", i, i+1, gap, min)
+		}
+	}
+}
+
+func TestRun_MaxRateSpacesAttempts(t *testing.T) {
+	target := newArrivalTarget(t, 0, 0)
+	req := model.RequestDefinition{ID: "req-probe", Method: http.MethodGet, URLTemplate: target.srv.URL}
+
 	start := time.Now()
 	run, err := engine.Run(context.Background(), req, probeConfig(6, 20), model.AuthConfig{})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := arrivals.Load(); got != 6 {
-		t.Fatalf("target saw %d attempts, want 6", got)
+	if run.Summary.TotalRequests != 6 || len(target.arrivals()) != 6 {
+		t.Fatalf("summary total %d, target saw %d; want 6 and 6", run.Summary.TotalRequests, len(target.arrivals()))
 	}
-	if run.Summary.TotalRequests != 6 {
-		t.Fatalf("summary total = %d, want 6", run.Summary.TotalRequests)
+	// 20/s is one release per 50ms; allow 10ms of dispatch jitter.
+	assertMinGap(t, target.arrivals(), 40*time.Millisecond)
+	if elapsed > 2*time.Second {
+		t.Errorf("run took %s; pacing should not wait much past 250ms", elapsed)
 	}
-	// 6 attempts at 20/s: releases at 0, 50, ..., 250ms. Allow timer slack.
-	if min := 240 * time.Millisecond; elapsed < min {
-		t.Fatalf("run took %s, want at least %s at max_rate 20", elapsed, min)
+}
+
+func TestRun_MaxRateNoCatchUpBurstAfterSlowResponses(t *testing.T) {
+	// Both workers are held 300ms by the first two attempts, so the feeder
+	// falls behind schedule. The cap must still hold once they free up.
+	target := newArrivalTarget(t, 2, 300*time.Millisecond)
+	req := model.RequestDefinition{ID: "req-probe", Method: http.MethodGet, URLTemplate: target.srv.URL}
+	cfg := probeConfig(6, 20)
+	cfg.Concurrency = 2
+
+	if _, err := engine.Run(context.Background(), req, cfg, model.AuthConfig{}); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
+	if n := len(target.arrivals()); n != 6 {
+		t.Fatalf("target saw %d attempts, want 6", n)
+	}
+	assertMinGap(t, target.arrivals(), 40*time.Millisecond)
 }
 
 func TestRun_MaxRateStopIsPrompt(t *testing.T) {
@@ -108,8 +168,8 @@ func TestRun_MaxRateStopIsPrompt(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("run did not stop within 500ms of cancel during a pacing wait")
 	}
-	if run.Summary.TotalRequests >= 5 {
-		t.Fatalf("summary total = %d, want fewer than 5 after an early stop", run.Summary.TotalRequests)
+	if run.Summary.TotalRequests != 1 || !run.Stopped {
+		t.Fatalf("summary total = %d, stopped = %v; want 1 attempt and a stopped run", run.Summary.TotalRequests, run.Stopped)
 	}
 }
 
@@ -122,10 +182,14 @@ func TestRun_MaxRateDurationStopsAtDeadline(t *testing.T) {
 	defer srv.Close()
 
 	req := model.RequestDefinition{ID: "req-probe", Method: http.MethodGet, URLTemplate: srv.URL}
-	cfg := probeConfig(0, 2) // releases at 0 and 500ms
+	cfg := probeConfig(0, 0.5) // releases at 0 and 2s
 	cfg.Duration = 300 * time.Millisecond
+	start := time.Now()
 	if _, err := engine.Run(context.Background(), req, cfg, model.AuthConfig{}); err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+		t.Errorf("run took %s; the deadline should end the pacing wait at ~300ms", elapsed)
 	}
 	if got := arrivals.Load(); got != 1 {
 		t.Fatalf("target saw %d attempts, want 1: the second release falls after the deadline", got)

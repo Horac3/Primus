@@ -6,6 +6,10 @@ import (
 	"github.com/Horac3/Primus/internal/model"
 )
 
+// MinMaxRate is the smallest accepted max_rate (one attempt per ~17
+// minutes); smaller values would overflow the pacing interval.
+const MinMaxRate = 0.001
+
 // ResolveAuth turns cfg.AuthSource into the auth and pool RunWithPool
 // takes. global is the stored global auth; pool is the run's candidate
 // pool (the active one in the UI, credential_pool_id in the CLI), or nil.

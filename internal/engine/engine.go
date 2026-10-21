@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"sort"
@@ -81,11 +82,18 @@ func ValidateTestConfig(cfg model.TestConfig) error {
 		return fmt.Errorf("set exactly one of total_requests (%d) or duration (%s), not both/neither",
 			cfg.TotalRequests, cfg.Duration)
 	}
-	if cfg.MaxRate < 0 {
-		return fmt.Errorf("max_rate must be >= 0 (got %g)", cfg.MaxRate)
+	// Written as !(>= 0) so NaN is rejected too.
+	if !(cfg.MaxRate >= 0) || math.IsInf(cfg.MaxRate, 0) {
+		return fmt.Errorf("max_rate must be a finite number >= 0 (got %g)", cfg.MaxRate)
+	}
+	if cfg.MaxRate > 0 && cfg.MaxRate < MinMaxRate {
+		return fmt.Errorf("max_rate must be 0 (no cap) or at least %g (got %g)", MinMaxRate, cfg.MaxRate)
 	}
 	if cfg.MaxRate > 0 && cfg.Mode != model.ModeAuthProbe {
 		return fmt.Errorf("max_rate applies to auth_probe only (mode %s)", cfg.Mode)
+	}
+	if cfg.MaxRate > 0 && cfg.BurstPattern != nil {
+		return fmt.Errorf("max_rate cannot be combined with a burst_pattern")
 	}
 	return nil
 }
@@ -340,16 +348,16 @@ func stopPredicate(cfg model.TestConfig, start time.Time, sent int) bool {
 // feed sends job tokens until the stop predicate holds, then closes the
 // channel. When a BurstPattern is set, jobs are released in pulses of
 // Count with Idle ms between them; when MaxRate is set, the n-th job is
-// released no earlier than start + n/MaxRate; otherwise as fast as
-// workers drain. Respects ctx cancellation.
+// released at least 1/MaxRate after the previous one was taken, so a
+// stall never turns into a catch-up burst; otherwise as fast as workers
+// drain. Respects ctx cancellation.
 func feed(ctx context.Context, jobs chan<- struct{}, cfg model.TestConfig, start time.Time) {
 	defer close(jobs)
 	sent := 0
+	var next time.Time // earliest release of the next job under MaxRate
 	for !stopPredicate(cfg, start, sent) {
-		// Rate ceiling: anchored to start so waits do not drift.
 		if cfg.MaxRate > 0 && sent > 0 {
-			release := start.Add(time.Duration(float64(sent) / cfg.MaxRate * float64(time.Second)))
-			if wait := time.Until(release); wait > 0 {
+			if wait := time.Until(next); wait > 0 {
 				select {
 				case <-ctx.Done():
 					return
@@ -365,6 +373,9 @@ func feed(ctx context.Context, jobs chan<- struct{}, cfg model.TestConfig, start
 			return
 		case jobs <- struct{}{}:
 			sent++
+			if cfg.MaxRate > 0 {
+				next = time.Now().Add(time.Duration(float64(time.Second) / cfg.MaxRate))
+			}
 		}
 		// Burst pacing: idle between pulses, never after the final one.
 		if cfg.BurstPattern != nil && cfg.BurstPattern.Count > 0 &&
@@ -715,6 +726,11 @@ func RunWithPool(ctx context.Context, req model.RequestDefinition, cfg model.Tes
 	}
 
 	buf := cfg.Concurrency
+	if cfg.MaxRate > 0 {
+		// Unbuffered: a release is the moment a worker takes the job, so
+		// MaxRate bounds dispatch, not just queueing.
+		buf = 0
+	}
 	if cfg.BurstPattern != nil && cfg.BurstPattern.Count > buf {
 		buf = cfg.BurstPattern.Count
 	}
