@@ -33,10 +33,12 @@ the code. Anything touching `internal/engine` concurrency should still be
 race-checked before merge; run it inside the Go Docker image instead:
 
 ```sh
-docker run --rm -v "$PWD":/src -w /src golang:1.25 go test -race ./...
+scripts/race.sh        # Git Bash, macOS, Linux
+scripts/race.ps1       # Windows PowerShell
 ```
 
-(On Windows PowerShell, replace `$PWD` with `${PWD}`.)
+Both run `go test ./... -race` in the `golang:1.25` image with a cached module volume, and pass extra
+arguments through (for example `-run TestName`).
 
 ## Docker Hub publishing
 
@@ -85,16 +87,30 @@ Test conventions:
 
 ## Commit convention
 
-One logical change per commit (and per PR — don't bundle unrelated work):
+One logical change per commit (and per PR — don't bundle unrelated work). Messages follow
+[Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-<scope>: <one-line summary>
+<type>(<scope>): <imperative lowercase summary, 72 characters or fewer>
 
 - <specific change 1>
 - <specific change 2>
 
 Tests: <what was added / what it covers>
 ```
+
+Types: `feat`, `fix`, `test`, `refactor`, `docs`, `chore`, `build`, `ci`, `perf`, `style`.
+Scopes: `engine`, `model`, `store`, `web`, `ui`, `insight`, `author`, `auth`, `importer`, `cli`, `docs`,
+`docker`, `ci`. Formatting-only changes go in their own `style:` commit.
+
+## Working with Claude Code
+
+The repo ships a [claude-kit](https://github.com/Horac3/claude-kit) setup (`CLAUDE.md`, `.claude/`). The loop is
+one roadmap step per conversation: `/next` plans the step from `docs/progress.md`, builds it test-first, `/review`
+checks the diff, `/commit` groups Conventional Commits, and `/handoff` records where to resume. Destructive
+commands (`rm`, `git reset --hard`, force pushes) are blocked by hooks. Maintainer notes live in
+`docs/progress.md`, `docs/decisions.md`, `docs/requirements.md` and `docs/architecture.md`; they are not part of
+the in-app docs.
 
 ## PR checklist
 
