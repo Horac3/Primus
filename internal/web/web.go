@@ -325,6 +325,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("GET /runs/{id}/status", runStatusHandler(db, tmpl, reg, analyzer))
 	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(db, tmpl, reg, analyzer))
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
+	mux.HandleFunc("GET /runs/{id}/series.csv", seriesCSVHandler(db))
 	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl, configuredQueryInterpreter()))
 	mux.HandleFunc("GET /docs", docsIndexHandler(tmpl))
 	mux.HandleFunc("GET /docs/{slug}", docsPageHandler(tmpl))
