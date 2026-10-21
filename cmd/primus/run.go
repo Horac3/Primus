@@ -63,6 +63,12 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		}
 		pool = &p
 	}
+	// auth_source picks global auth, the pool, or no auth at all.
+	auth, pool, err = engine.ResolveAuth(cfg, auth, pool)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "primus run: %v\n", err)
+		return 2
+	}
 
 	// Execute the run using the same engine as the web handler.
 	// CLI stays synchronous: it calls the engine directly and waits.

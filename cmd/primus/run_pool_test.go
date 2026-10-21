@@ -85,3 +85,53 @@ func TestRunCmd_CredentialPool(t *testing.T) {
 		})
 	}
 }
+
+func TestRunCmd_AuthSourceNoneSendsNoAuth(t *testing.T) {
+	// Arrange
+	var authed atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			authed.Add(1)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "req", Method: "GET", URLTemplate: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveGlobalAuth(db, model.AuthConfig{Type: model.AuthTypeBearer, Token: "global-token"}); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := writeConfigFile(t, model.TestConfig{
+		ID: "cfg", RequestID: "req", Mode: model.ModeAuthProbe, Concurrency: 1, TotalRequests: 3,
+		Assertions: model.Assertions{ExpectedStatus: []int{401}},
+		AuthSource: model.AuthSourceNone,
+	})
+	var out bytes.Buffer
+
+	// Act
+	code := runCmd(context.Background(), []string{cfgPath}, &out, db)
+
+	// Assert
+	if code != 0 || authed.Load() != 0 {
+		t.Errorf("exit %d with %d authed attempts, want exit 0 and none; output:\n%s", code, authed.Load(), out.String())
+	}
+}
+
+func TestRunCmd_AuthSourcePoolWithoutPool_ExitsTwo(t *testing.T) {
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "req", Method: "GET", URLTemplate: "http://127.0.0.1:1"}); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := writeConfigFile(t, model.TestConfig{
+		ID: "cfg", RequestID: "req", Mode: model.ModeAuthProbe, Concurrency: 1, TotalRequests: 1,
+		AuthSource: model.AuthSourcePool,
+	})
+	var out bytes.Buffer
+
+	if code := runCmd(context.Background(), []string{cfgPath}, &out, db); code != 2 {
+		t.Errorf("exit %d, want 2 for auth_source pool without credential_pool_id; output:\n%s", code, out.String())
+	}
+}

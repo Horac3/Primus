@@ -81,6 +81,12 @@ func ValidateTestConfig(cfg model.TestConfig) error {
 		return fmt.Errorf("set exactly one of total_requests (%d) or duration (%s), not both/neither",
 			cfg.TotalRequests, cfg.Duration)
 	}
+	if cfg.MaxRate < 0 {
+		return fmt.Errorf("max_rate must be >= 0 (got %g)", cfg.MaxRate)
+	}
+	if cfg.MaxRate > 0 && cfg.Mode != model.ModeAuthProbe {
+		return fmt.Errorf("max_rate applies to auth_probe only (mode %s)", cfg.Mode)
+	}
 	return nil
 }
 
@@ -333,12 +339,27 @@ func stopPredicate(cfg model.TestConfig, start time.Time, sent int) bool {
 
 // feed sends job tokens until the stop predicate holds, then closes the
 // channel. When a BurstPattern is set, jobs are released in pulses of
-// Count with Idle ms between them; otherwise as fast as workers drain.
-// Respects ctx cancellation.
+// Count with Idle ms between them; when MaxRate is set, the n-th job is
+// released no earlier than start + n/MaxRate; otherwise as fast as
+// workers drain. Respects ctx cancellation.
 func feed(ctx context.Context, jobs chan<- struct{}, cfg model.TestConfig, start time.Time) {
 	defer close(jobs)
 	sent := 0
 	for !stopPredicate(cfg, start, sent) {
+		// Rate ceiling: anchored to start so waits do not drift.
+		if cfg.MaxRate > 0 && sent > 0 {
+			release := start.Add(time.Duration(float64(sent) / cfg.MaxRate * float64(time.Second)))
+			if wait := time.Until(release); wait > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+				if stopPredicate(cfg, start, sent) {
+					return
+				}
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return

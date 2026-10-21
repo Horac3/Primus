@@ -123,7 +123,23 @@ type TestConfig struct {
 	// CredentialPoolID selects a credential pool whose per-worker logins
 	// replace global auth for this run. Empty means global auth applies.
 	CredentialPoolID string `json:"credential_pool_id,omitempty"`
+	// MaxRate caps how many attempts per second an auth-probe run releases.
+	// It is a ceiling, not a target; 0 means no cap.
+	MaxRate float64 `json:"max_rate,omitempty"`
+	// AuthSource picks the run's identity; empty keeps the default (an
+	// active pool, else global auth).
+	AuthSource AuthSource `json:"auth_source,omitempty"`
 }
+
+// AuthSource says which identity a run sends.
+type AuthSource string
+
+const (
+	AuthSourceDefault AuthSource = ""
+	AuthSourceGlobal  AuthSource = "global"
+	AuthSourcePool    AuthSource = "pool"
+	AuthSourceNone    AuthSource = "none"
+)
 
 // MaxCredentialPoolRows caps how many credentials one pool may hold.
 const MaxCredentialPoolRows = 10000
