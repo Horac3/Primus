@@ -1006,6 +1006,10 @@ func generateRunInsight(db *sql.DB, run model.Run, analyzer insight.Analyzer) {
 	}
 	if err := store.CompleteInsight(db, run.ID, report.AnalyzerName, report.ModelName, report.Text); err != nil {
 		log.Printf("web: persist completed insight for run %s: %v", run.ID, err)
+		// A pending row would keep the fragment polling "Generating..." until restart; end it as failed.
+		if updateErr := store.FailInsight(db, run.ID, report.AnalyzerName, report.ModelName, "the generated insight could not be saved"); updateErr != nil {
+			log.Printf("web: persist failed insight for run %s: %v", run.ID, updateErr)
+		}
 	}
 }
 

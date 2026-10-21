@@ -602,6 +602,47 @@ func TestRunInsightDisplaysRulesFallbackAnalyzer(t *testing.T) {
 	}
 }
 
+func TestRunInsightFailsWhenCompletionCannotBeSaved(t *testing.T) {
+	// Arrange: the completion UPDATE aborts, as a write that still cannot get the lock would.
+	t.Setenv("PRIMUS_ANALYZER", "rules")
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-lost-write", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER abort_insight_done BEFORE UPDATE ON insights WHEN NEW.status = 'done'
+		BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	// Act
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/runs/run-lost-write/insights", nil))
+	deadline := time.Now().Add(2 * time.Second)
+	var got store.InsightRecord
+	for time.Now().Before(deadline) {
+		var err error
+		got, err = store.GetInsight(db, "run-lost-write")
+		if err == nil && got.Status != store.InsightPending {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Assert
+	if got.Status != store.InsightFailed || got.Error == "" {
+		t.Fatalf("insight after a failed completion write = %+v, want failed with an error", got)
+	}
+	fragment := httptest.NewRecorder()
+	mux.ServeHTTP(fragment, httptest.NewRequest(http.MethodGet, "/runs/run-lost-write/insights", nil))
+	if !strings.Contains(fragment.Body.String(), "could not be saved") {
+		t.Errorf("fragment does not show the save failure: %s", fragment.Body.String())
+	}
+	if strings.Contains(fragment.Body.String(), `hx-trigger="every 2s"`) {
+		t.Errorf("fragment still polls after a failed completion write: %s", fragment.Body.String())
+	}
+}
+
 func TestRunInsightStartupMarksPendingFailed(t *testing.T) {
 	db := newTestDB(t)
 	if _, _, err := store.StartInsight(db, "run-orphan", "rules", "rules-v1"); err != nil {
