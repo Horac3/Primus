@@ -11,6 +11,14 @@ plain language and the list shows only the runs that match:
 
 Clear the box and press Search to get the full list back.
 
+## Clearing history
+
+History can be cleared for one endpoint (button in its panel), for one
+collection (Collections panel), or for everything (**Clear all history** above the
+list). Each asks first and says how many runs it will remove. Clearing removes the
+runs and their insights; endpoints and saved test configs stay. It is refused
+while a run in that scope is active, and says so if there is nothing to clear.
+
 ## How a question is read
 
 Primus never runs a question directly. It first turns the question into a

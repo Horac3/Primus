@@ -13,6 +13,9 @@ primus run <config.json> [--db <path>]
 - `<config.json>` — a `TestConfig` JSON file (see [load](load.md) for the
   shape). The referenced `request_id` must already be in the DB: import
   the spec through the web UI first, or share the UI's DB file.
+- If the endpoint's URL starts with `{{base_url}}`, the CLI resolves it from the
+  endpoint's collection in the same DB, exactly as the web UI does (see
+  [load](load.md#collections-and-base_url)). A collection with no base URL exits `2`.
 - `--db` — SQLite file, default `primus.db` (same default the server uses).
 - Global auth comes from the same DB — set it in the UI once, or leave it
   unset for anonymous targets.
@@ -36,7 +39,7 @@ primus run <config.json> [--db <path>]
 |---|---|
 | `0` | Run passed all assertions. |
 | `1` | Run completed but an assertion failed (or every request failed). |
-| `2` | Usage/config error: missing file, invalid JSON, failed validation, unknown `request_id`. |
+| `2` | Usage/config error: missing file, invalid JSON, failed validation, unknown `request_id`, `{{base_url}}` with no base URL. |
 
 ## JSON output (stdout)
 

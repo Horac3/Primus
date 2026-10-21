@@ -15,6 +15,25 @@ Set exactly one — the run is rejected otherwise. In the web UI, load is
 duration-driven (default 30 s); `total_requests` configs still work via the
 CLI and JSON.
 
+## Collections and `{{base_url}}`
+
+Every endpoint belongs to one **collection**, a named group. Open the
+**Collections** panel from the sidebar to create, rename or delete them. Endpoints
+saved before collections existed are in a collection called **My endpoints**.
+
+A collection can have a **base URL**. An endpoint URL that starts with
+`{{base_url}}` (for example `{{base_url}}/posts/1`) takes that base URL at probe
+and run time, so changing the base URL points the whole group at another
+host. The endpoint keeps the `{{base_url}}` text; only the request that is sent
+uses the resolved URL. If the collection has no base URL, the probe or run is
+refused with a message saying so. The placeholder is only recognised at the
+very start of the URL.
+
+Deleting a collection removes its endpoints, their saved test configs, runs and
+insights, after a prompt that shows the counts. It is refused while any run in the
+collection is active; stop the run first. Credential pools are not part of a
+collection and are not touched.
+
 ## Other fields
 
 | Field | Type | Default | Meaning |
