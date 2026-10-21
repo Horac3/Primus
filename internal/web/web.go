@@ -61,6 +61,9 @@ func outcomeLabel(o model.RunOutcome) string {
 var templateFuncs = template.FuncMap{
 	"mul":    func(a, b float64) float64 { return a * b },
 	"redact": redactURLs,
+	"reportDuration": func(r model.Run) string {
+		return r.FinishedAt.Sub(r.StartedAt).Round(time.Millisecond).String()
+	},
 	"outcomeClass": func(o model.RunOutcome) string {
 		switch o {
 		case model.OutcomePass:
@@ -330,6 +333,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
 	mux.HandleFunc("GET /runs/{id}/series.csv", seriesCSVHandler(db))
 	mux.HandleFunc("GET /runs/{id}/report.md", reportMarkdownHandler(db))
+	mux.HandleFunc("GET /runs/{id}/report.html", reportHTMLHandler(db, tmpl))
 	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl, configuredQueryInterpreter()))
 	mux.HandleFunc("GET /docs", docsIndexHandler(tmpl))
 	mux.HandleFunc("GET /docs/{slug}", docsPageHandler(tmpl))

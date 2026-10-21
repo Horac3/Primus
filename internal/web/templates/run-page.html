@@ -30,6 +30,7 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
 <h1>Run result</h1>
 <p class="muted">{{.ID}} &middot; config: {{.TestConfigID}}</p>
 <p class="muted">{{.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</p>
+<p class="muted">Download: <a href="/runs/{{.ID}}/report.html">HTML report</a> &middot; <a href="/runs/{{.ID}}/report.md">Markdown</a> &middot; <a href="/runs/{{.ID}}/series.csv">CSV (time series)</a></p>
 
 <p style="margin-top:.75rem">
   <span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span>

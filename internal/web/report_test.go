@@ -141,6 +141,101 @@ func TestMarkdownReport(t *testing.T) {
 	})
 }
 
+func TestHTMLReport(t *testing.T) {
+	now := time.Now().UTC()
+	run := model.Run{
+		ID: "run-html", Mode: model.ModeBurst, Concurrency: 5,
+		StartedAt: now, FinishedAt: now.Add(3 * time.Second),
+		Summary: model.RunSummary{
+			TotalRequests: 50, P95Millis: 42,
+			StatusCounts: map[int]int{200: 50},
+			ErrorDetails: []model.ErrorDetail{{Cause: `Get "http://u:p@h.test/x?api_key=ERRSECRET": refused`, Count: 1}},
+		},
+		AssertionResults: []model.AssertionResult{{Name: "p95 under 100ms", Passed: true}},
+		LatencyBuckets:   []int{5, 20, 15, 5, 3, 1, 1, 0, 0},
+		TimeSeries: []model.Point{
+			{ElapsedMs: 1000, AvgLatencyMs: 10, RPS: 20},
+			{ElapsedMs: 2000, AvgLatencyMs: 14, RPS: 25},
+			{ElapsedMs: 3000, AvgLatencyMs: 12, RPS: 22},
+		},
+		Outcome: model.OutcomePass,
+	}
+	db := newTestDB(t)
+	seedReportRun(t, db, run)
+	if err := store.SaveGlobalAuth(db, model.AuthConfig{Type: model.AuthTypeBearer, Token: "GLOBALSECRET"}); err != nil {
+		t.Fatalf("SaveGlobalAuth: %v", err)
+	}
+	if _, _, err := store.StartInsight(db, "run-html", "rules", ""); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+	if err := store.CompleteInsight(db, "run-html", "rules", "", "Latency is stable."); err != nil {
+		t.Fatalf("CompleteInsight: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	t.Run("is a self-contained attachment", func(t *testing.T) {
+		rr := getExport(t, mux, "/runs/run-html/report.html")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+		}
+		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("Content-Type = %q, want text/html", ct)
+		}
+		if cd := rr.Header().Get("Content-Disposition"); cd != `attachment; filename="primus-run-run-html.html"` {
+			t.Errorf("Content-Disposition = %q", cd)
+		}
+		body := rr.Body.String()
+		for _, want := range []string{
+			"<svg", "PASSED", "GET https://api.example.test/v1/orders", "p95 under 100ms",
+			"via rules", "Latency is stable.", "http://h.test/x",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("report missing %q", want)
+			}
+		}
+		for _, banned := range []string{"<script", "hx-", "/static/", "<a href", "src=\"http", "href=\"http"} {
+			if strings.Contains(body, banned) {
+				t.Errorf("report is not self-contained, contains %q", banned)
+			}
+		}
+	})
+
+	t.Run("without an insight it says so", func(t *testing.T) {
+		db := newTestDB(t)
+		seedReportRun(t, db, model.Run{ID: "run-bare", Outcome: model.OutcomePass})
+		body := getExport(t, web.NewServer(db), "/runs/run-bare/report.html").Body.String()
+		if !strings.Contains(body, "No insight generated") {
+			t.Errorf("report does not say there is no insight")
+		}
+	})
+
+	t.Run("unknown run is 404", func(t *testing.T) {
+		if rr := getExport(t, mux, "/runs/nope/report.html"); rr.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rr.Code)
+		}
+	})
+
+	t.Run("no export leaks a secret", func(t *testing.T) {
+		for _, path := range []string{"report.html", "report.md", "series.csv"} {
+			body := getExport(t, mux, "/runs/run-html/"+path).Body.String()
+			for _, secret := range []string{"QUERYSECRET", "HEADERSECRET", "BODYSECRET", "GLOBALSECRET", "ERRSECRET", "u:p@"} {
+				if strings.Contains(body, secret) {
+					t.Errorf("%s leaks %q", path, secret)
+				}
+			}
+		}
+	})
+
+	t.Run("run page links the three downloads", func(t *testing.T) {
+		body := getExport(t, mux, "/runs/run-html").Body.String()
+		for _, link := range []string{`href="/runs/run-html/report.html"`, `href="/runs/run-html/report.md"`, `href="/runs/run-html/series.csv"`} {
+			if !strings.Contains(body, link) {
+				t.Errorf("run page missing download link %s", link)
+			}
+		}
+	})
+}
+
 func TestSeriesCSV(t *testing.T) {
 	// Arrange
 	db := newTestDB(t)

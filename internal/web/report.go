@@ -1,9 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -88,6 +90,28 @@ func reportMarkdownHandler(db *sql.DB) http.HandlerFunc {
 		setAttachment(w, "text/markdown; charset=utf-8", run.ID, "md")
 		if _, err := io.WriteString(w, renderMarkdown(buildReportData(db, run))); err != nil {
 			log.Printf("markdown report for run %s: %v", run.ID, err)
+		}
+	}
+}
+
+// ---- GET /runs/{id}/report.html — self-contained html report ---------------
+
+func reportHTMLHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		run, err := store.GetRun(db, r.PathValue("id"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		var buf bytes.Buffer
+		if err := tmpl.ExecuteTemplate(&buf, "report.html", buildReportData(db, run)); err != nil {
+			log.Printf("html report for run %s: %v", run.ID, err)
+			http.Error(w, "could not render report", http.StatusInternalServerError)
+			return
+		}
+		setAttachment(w, "text/html; charset=utf-8", run.ID, "html")
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			log.Printf("html report for run %s: %v", run.ID, err)
 		}
 	}
 }
