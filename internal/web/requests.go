@@ -83,9 +83,14 @@ type panelData struct {
 	IsNew            bool
 	HasBody          bool
 	AuthoringEnabled bool
+	Collections      []model.Collection
 }
 
-func panelDataFor(def model.RequestDefinition, isNew, authoringEnabled bool) panelData {
+func panelDataFor(db *sql.DB, def model.RequestDefinition, isNew, authoringEnabled bool) panelData {
+	collections, err := store.ListCollections(db)
+	if err != nil {
+		log.Printf("web: list collections for builder: %v", err)
+	}
 	var body string
 	if def.Body != nil {
 		body = string(def.Body.Raw)
@@ -102,7 +107,7 @@ func panelDataFor(def model.RequestDefinition, isNew, authoringEnabled bool) pan
 	return panelData{
 		Def: def, BodyStr: body, HeadersJSON: string(headers),
 		AuthzOverride: override, IsNew: isNew, HasBody: def.Body != nil && len(def.Body.Raw) > 0,
-		AuthoringEnabled: authoringEnabled,
+		AuthoringEnabled: authoringEnabled, Collections: collections,
 	}
 }
 
@@ -110,7 +115,7 @@ func requestPanelHandler(db *sql.DB, tmpl *template.Template, authoringEnabled b
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "new" {
-			renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(model.RequestDefinition{Method: "GET"}, true, authoringEnabled))
+			renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(db, model.RequestDefinition{Method: "GET"}, true, authoringEnabled))
 			return
 		}
 		def, err := store.GetRequestDefinition(db, id)
@@ -118,7 +123,7 @@ func requestPanelHandler(db *sql.DB, tmpl *template.Template, authoringEnabled b
 			http.NotFound(w, r)
 			return
 		}
-		renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(def, false, authoringEnabled))
+		renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(db, def, false, authoringEnabled))
 	}
 }
 
@@ -171,7 +176,7 @@ func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool) h
 		}
 		if len(defs) > 0 {
 			fmt.Fprint(w, `<div id="main-panel" hx-swap-oob="true">`)
-			if err := tmpl.ExecuteTemplate(w, "endpoint-panel.html", panelDataFor(defs[0], false, authoringEnabled)); err != nil {
+			if err := tmpl.ExecuteTemplate(w, "endpoint-panel.html", panelDataFor(db, defs[0], false, authoringEnabled)); err != nil {
 				log.Printf("template endpoint-panel.html: %v", err)
 				return
 			}

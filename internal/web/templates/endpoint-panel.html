@@ -36,9 +36,16 @@
     </label>
     <label style="flex:1 1 auto">
       <span>URL</span>
-      <input type="url" name="url" value="{{.Def.URLTemplate}}" placeholder="https://api.example.com/endpoint" required>
+      <input type="text" name="url" value="{{.Def.URLTemplate}}" placeholder="https://api.example.com/endpoint or {{"{{base_url}}"}}/endpoint" required>
     </label>
   </div>
+  <label style="margin-bottom:.5rem">
+    <span>Collection</span>
+    <select name="collection_id">
+      {{if not .Collections}}<option value="">My endpoints</option>{{end}}
+      {{range .Collections}}<option value="{{.ID}}" {{if eq .ID $.Def.CollectionID}}selected{{end}}>{{.Name}}</option>{{end}}
+    </select>
+  </label>
 
   <details>
     <summary>JSON body (optional)</summary>
@@ -187,4 +194,12 @@
   </div>
 </form>
 
+{{if not .IsNew}}
+<form hx-post="/history/clear" hx-target="next .slot" hx-swap="innerHTML" style="margin-top:1rem">
+  <input type="hidden" name="scope" value="endpoint">
+  <input type="hidden" name="id" value="{{.Def.ID}}">
+  <button type="submit" class="secondary">Clear history for this endpoint</button>
+</form>
+<div class="slot"></div>
+{{end}}
 <div id="results" style="margin-top:1.25rem"></div>

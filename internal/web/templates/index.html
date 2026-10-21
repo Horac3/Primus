@@ -69,10 +69,12 @@ details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 
   </div>
   <!-- Credential pool manager, opened from the auth bar -->
   <div id="pool-panel"></div>
+  <!-- Collection manager, opened from the sidebar -->
+  <div id="collections-panel"></div>
 
   <div class="layout">
     <!-- Sidebar: every endpoint + import, loaded once -->
-    <aside id="sidebar" hx-get="/sidebar-fragment" hx-trigger="load" hx-swap="innerHTML">
+    <aside id="sidebar" hx-get="/sidebar-fragment" hx-trigger="load, collections-changed from:body" hx-swap="innerHTML">
       <span class="muted">loading endpoints…</span>
     </aside>
 
@@ -91,7 +93,12 @@ details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 
            placeholder="e.g. failed burst runs last week" style="flex:1 1 12rem;min-width:0">
     <button type="submit">Search</button>
   </form>
-  <div id="history" hx-get="/history-fragment" hx-trigger="load" hx-swap="innerHTML">
+  <form hx-post="/history/clear" hx-target="next .slot" hx-swap="innerHTML" style="margin-bottom:.5rem">
+    <input type="hidden" name="scope" value="all">
+    <button type="submit" class="secondary">Clear all history</button>
+  </form>
+  <div class="slot"></div>
+  <div id="history" hx-get="/history-fragment" hx-trigger="load, history-changed from:body" hx-swap="innerHTML">
     <span class="muted">loading history…</span>
   </div>
 

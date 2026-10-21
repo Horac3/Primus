@@ -302,3 +302,103 @@ func TestStopThenDelete_EventuallySucceeds(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// ---- wiring in the existing pages -------------------------------------------
+
+func TestEndpointPanel_CollectionSelectListsAndSelectsOwn(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	a, _ := store.CreateCollection(db, "Alpha", "")
+	b, _ := store.CreateCollection(db, "Beta", "")
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "ep", Name: "ep", Method: "GET", URLTemplate: "{{base_url}}/x", CollectionID: b.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getPath(t, mux, "/requests/ep").Body.String()
+
+	for _, want := range []string{`name="collection_id"`, ">Alpha<", ">Beta<", `value="` + b.ID + `" selected`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("panel missing %q", want)
+		}
+	}
+	if strings.Contains(body, `value="`+a.ID+`" selected`) {
+		t.Error("the other collection is selected")
+	}
+}
+
+func TestEndpointPanel_NewEndpointOffersCollections(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	if _, err := store.CreateCollection(db, "Alpha", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getPath(t, mux, "/requests/new").Body.String()
+
+	if !strings.Contains(body, `name="collection_id"`) || !strings.Contains(body, ">Alpha<") {
+		t.Errorf("new-endpoint panel has no collection select: %s", body)
+	}
+}
+
+func TestEndpointPanel_URLFieldAcceptsBasePlaceholder(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	body := getPath(t, mux, "/requests/new").Body.String()
+
+	// type="url" would make the browser reject "{{base_url}}/x" before the form is sent.
+	if strings.Contains(body, `type="url" name="url"`) {
+		t.Error("URL input is type=url and rejects {{base_url}}")
+	}
+	if !strings.Contains(body, `name="url"`) {
+		t.Error("URL input missing")
+	}
+}
+
+func TestEndpointPanel_SavedEndpointCanClearItsHistory(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "ep", Name: "ep", Method: "GET", URLTemplate: "http://x"}); err != nil {
+		t.Fatal(err)
+	}
+
+	saved := getPath(t, mux, "/requests/ep").Body.String()
+	fresh := getPath(t, mux, "/requests/new").Body.String()
+
+	if !strings.Contains(saved, `hx-post="/history/clear"`) || !strings.Contains(saved, `value="endpoint"`) {
+		t.Error("saved endpoint has no clear-history control")
+	}
+	if strings.Contains(fresh, `hx-post="/history/clear"`) {
+		t.Error("an unsaved endpoint offers clear history")
+	}
+}
+
+func TestSidebar_LinksToCollectionsPanel(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	body := getPath(t, mux, "/sidebar-fragment").Body.String()
+
+	if !strings.Contains(body, `hx-get="/collections"`) || !strings.Contains(body, `#collections-panel`) {
+		t.Errorf("sidebar has no link to the collections panel: %s", body)
+	}
+}
+
+func TestIndex_HasCollectionsPanelClearAllAndRefreshTriggers(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	body := getPath(t, mux, "/").Body.String()
+
+	for _, want := range []string{
+		`id="collections-panel"`,
+		`collections-changed from:body`,
+		`history-changed from:body`,
+		`hx-post="/history/clear"`,
+		`value="all"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("index missing %q", want)
+		}
+	}
+}

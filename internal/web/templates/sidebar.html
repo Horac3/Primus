@@ -3,6 +3,8 @@
   <strong>Endpoints</strong>
   <button class="secondary" style="padding:.2rem .6rem"
     hx-get="/requests/new" hx-target="#main-panel" hx-swap="innerHTML">+ New</button>
+  <button class="secondary" style="padding:.2rem .6rem"
+    hx-get="/collections" hx-target="#collections-panel" hx-swap="innerHTML">Collections</button>
 </div>
 {{if .Endpoints}}
 <div>
