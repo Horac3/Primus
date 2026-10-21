@@ -15,7 +15,7 @@ internal/engine/ engine.go (entrypoints Run/RunWithSnapshot/RunWithPool, buildRu
                  aggregate.go (aggregator goroutine, percentiles, histogram, series) · verdict.go (ValidateTestConfig,
                  assertions, DetermineOutcome) · probe.go (ResolveAuth) · pool.go (login phase, per-worker tokens) · provision.go (sign-up N accounts, D-016)
 internal/store/  store.go (SQLite open, migrate, requests/configs/runs/auth/insights) · pools.go (credential pools)
-internal/web/    web.go (routes + most handlers) · pools.go (pool panel) · registry.go (generic async job registry: runs, provisioning) · provision.go (pool provisioning) ·
+internal/web/    web.go (embed, routes, analyzer wiring) · templates.go (template funcs, chart helpers) · auth.go (auth bar) · requests.go (sidebar, request panel, import, probe) · authoring.go (NL request/config/payload handlers) · runs.go (start/status/stop/result, `parseTestConfig`) · insight.go · history.go · docs.go (in-app viewer) · pools.go (pool panel) · registry.go (generic async job registry: runs, provisioning) · provision.go (pool provisioning) ·
                  report.go (html/md/csv run downloads, `redactURLs`, `endpointLabel`) · templates/ · static/
 internal/insight/ analyzer.go (interface, rules fallback) · insight.go (summary, findings, grounding) · ollama.go ·
                  query_filter.go (history `Filter`: Validate/Apply/Describe) · query_rules.go (rules parser) ·
@@ -58,8 +58,8 @@ CI is `.github/workflows/docker-publish.yml` (workflow `CI`): a `test` job (buil
 push and PR, and a `publish` job (`needs: test`) that pushes to Docker Hub only on `main`/`master` and `v*` tags.
 
 ## Hotspots
-`internal/web/web.go` (1309 lines, most handlers) is still unsplit (roadmap step 14). `internal/engine/engine.go` was
-split (now 259 lines). History in this clone is shallow, so churn data is unreliable.
+`internal/web/web.go` (was 1323 lines) and `internal/engine/engine.go` (was 766) were split by concern in step 14;
+`pools.go` (434 lines) is now the largest web file. History in this clone is shallow, so churn data is unreliable.
 
 ## Planned
 `tools/` (roadmap step 11, FR-META-01..04): local commit-message assistant. Dev tooling only; must not be imported by
