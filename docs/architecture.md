@@ -13,9 +13,9 @@ internal/model/  shared types: RequestDefinition, TestConfig, Assertions, Run, R
 internal/engine/ engine.go (entrypoints Run/RunWithSnapshot/RunWithPool, buildRun, Probe, applyAuth, params) ·
                  dispatch.go (stopPredicate, feed, workers, execRequest) · rate.go (open-loop `schedule`, mode: rate) ·
                  aggregate.go (aggregator goroutine, percentiles, histogram, series) · verdict.go (ValidateTestConfig,
-                 assertions, DetermineOutcome) · probe.go (ResolveAuth) · pool.go (login phase, per-worker tokens)
+                 assertions, DetermineOutcome) · probe.go (ResolveAuth) · pool.go (login phase, per-worker tokens) · provision.go (sign-up N accounts, D-016)
 internal/store/  store.go (SQLite open, migrate, requests/configs/runs/auth/insights) · pools.go (credential pools)
-internal/web/    web.go (routes + most handlers) · pools.go (pool panel) · registry.go (async run registry) ·
+internal/web/    web.go (routes + most handlers) · pools.go (pool panel) · registry.go (generic async job registry: runs, provisioning) · provision.go (pool provisioning) ·
                  report.go (html/md/csv run downloads, `redactURLs`, `endpointLabel`) · templates/ · static/
 internal/insight/ analyzer.go (interface, rules fallback) · insight.go (summary, findings, grounding) · ollama.go ·
                  query_filter.go (history `Filter`: Validate/Apply/Describe) · query_rules.go (rules parser) ·

@@ -5,10 +5,11 @@ instead of one shared identity. Before measurement starts, each worker logs
 in once as its own account, keeps the token it gets back, and sends that
 token on every request it dispatches.
 
-**The accounts must already exist on the target.** Primus never signs up or
-creates accounts. Import credentials for users you have already provisioned
-(a seeded test database, a fixture script, an identity provider's test
-tenant).
+**The accounts must exist on the target before a run starts.** Either import
+credentials for users you have already provisioned (a seeded test database, a
+fixture script, an identity provider's test tenant), or create new ones with
+[Provision accounts](#provision-accounts). Primus never signs up accounts
+during a run.
 
 ## How a pooled run works
 
@@ -148,6 +149,49 @@ It runs at most once per worker per run, so it covers one expiry. If the
 run lasts more than about twice the token lifetime, the fresh token
 expires too and later requests `401` again. Shorten the run or ask the
 target for longer-lived tokens.
+
+## Provision accounts
+
+Open **Provision accounts** in the pool panel to sign up new accounts on the
+target before you test. It is a separate action that you start; a run never
+signs anyone up.
+
+1. Choose **New pool…** (and name it) or an existing pool to add to.
+2. Set **Accounts** (how many) and **Concurrency** (sign-ups in flight at once).
+   An existing pool can grow up to the 10,000-account limit.
+3. List the **account fields**, one `name=template` per line. Two values are
+   generated for each account: `{{seq}}` counts 1, 2, 3… (continuing after the
+   pool's existing accounts) and `{{secret}}` is a random 24-character password
+   unique to that account.
+   ```
+   email=user{{seq}}@example.test
+   password={{secret}}
+   ```
+4. Describe the **sign-up request** (method, URL, headers, body). Use the field
+   names as `{{field}}` placeholders, for example
+   `{"email":"{{email}}","password":"{{password}}"}`.
+5. Optionally **keep a value from the response**, such as the new user's id
+   (`user_id` from `id`), as an extra field on the row.
+
+Primus sends one request per account. A response with an HTTP 2xx status adds a
+row to the pool; anything else adds nothing. The panel shows how many accounts
+were created, failed or were cancelled, with the failure reasons (`HTTP 409`,
+`timeout`, `connection error`). Stop keeps the accounts already created and
+counts the rest as cancelled. If a 2xx response lacks the value you asked to
+keep, the account is still saved and the summary says so.
+
+Fields built from `{{secret}}` are masked, like any other secret field. A new
+pool starts with a default login step: set its login URL (and the token path)
+under **Login step** before using it for runs.
+
+Limits you should know:
+
+- **Accounts stay on the target.** Primus cannot delete them, so use a test
+  system and expect the data to remain after the run.
+- No email verification and no captcha handling: the target must accept a plain
+  sign-up request.
+- Sign-up endpoints are often rate limited. Lower the concurrency if you see
+  `HTTP 429`.
 
 ## Secrets
 
