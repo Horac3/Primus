@@ -135,6 +135,20 @@ Re-logins are counted separately from the login phase. A re-login happens
 during measurement, so its time does count toward the run's wall-clock
 time.
 
+Turn it on when the target's tokens can expire before the run ends,
+which is typical for a soak run against short-lived access tokens. With
+it off, every request after expiry gets a `401`. Those count as errors,
+and fail the run, only when [`expected_status`](assertions.md) excludes
+401. Without it they are counted as completed requests and the run can
+still pass. Leave it off for short load and burst runs, where tokens
+outlive the run and a `401` usually means a wrong credential or a broken
+login extraction. Re-login won't hide those.
+
+It runs at most once per worker per run, so it covers one expiry. If the
+run lasts more than about twice the token lifetime, the fresh token
+expires too and later requests `401` again. Shorten the run or ask the
+target for longer-lived tokens.
+
 ## Secrets
 
 - Masking is set per field. Under the preview table, **Masked fields** has a
