@@ -18,7 +18,7 @@ func TestList_CoversAllModes(t *testing.T) {
 	list := docs.List()
 
 	// Assert — all four modes plus the three guides, each with a title
-	want := []string{"load", "burst", "soak", "auth-probe", "global-auth", "credential-pools", "assertions", "history", "cli"}
+	want := []string{"load", "burst", "soak", "auth-probe", "global-auth", "credential-pools", "assertions", "history", "reports", "cli"}
 	if len(list) != len(want) {
 		t.Fatalf("len = %d, want %d (%v)", len(list), len(want), list)
 	}
