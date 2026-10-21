@@ -133,10 +133,12 @@ func deleteCollectionHandler(db *sql.DB, tmpl *template.Template, reg *Registry,
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		guard.mu.Lock()
-		defer guard.mu.Unlock()
+		unlock := sync.OnceFunc(guard.mu.Unlock)
+		defer unlock()
 
 		col, err := store.GetCollection(db, id)
 		if err != nil {
+			unlock()
 			respondCollectionsError(w, db, tmpl, err)
 			return
 		}
@@ -147,6 +149,7 @@ func deleteCollectionHandler(db *sql.DB, tmpl *template.Template, reg *Registry,
 			return
 		}
 		if active {
+			unlock()
 			renderCollectionsPanel(w, db, tmpl, collectionsView{Error: activeMessage(col.Name)})
 			return
 		}
@@ -160,6 +163,7 @@ func deleteCollectionHandler(db *sql.DB, tmpl *template.Template, reg *Registry,
 			if col.BuiltIn() {
 				prompt += " It is built in and stays deleted until you restore the examples."
 			}
+			unlock()
 			renderCollectionsPanel(w, db, tmpl, collectionsView{Confirm: &confirmView{
 				Prompt: prompt, Action: "/collections/" + id + "/delete", Target: "#collections-panel",
 			}})
@@ -167,10 +171,12 @@ func deleteCollectionHandler(db *sql.DB, tmpl *template.Template, reg *Registry,
 		}
 		counts, err := store.DeleteCollection(db, id)
 		if err != nil {
+			unlock()
 			respondCollectionsError(w, db, tmpl, err)
 			return
 		}
 		w.Header().Set("HX-Trigger", "collections-changed, history-changed")
+		unlock()
 		renderCollectionsPanel(w, db, tmpl, collectionsView{
 			Message: fmt.Sprintf("Deleted %s (%d endpoints, %d runs).", col.Name, counts.Endpoints, counts.Runs),
 		})
@@ -202,7 +208,8 @@ func clearHistoryHandler(db *sql.DB, tmpl *template.Template, reg *Registry, gua
 		}
 
 		guard.mu.Lock()
-		defer guard.mu.Unlock()
+		unlock := sync.OnceFunc(guard.mu.Unlock)
+		defer unlock()
 
 		render := func(v collectionsView) { renderTemplate(w, tmpl, "confirm-fragment.html", v) }
 		active, err := activeRunIn(db, reg, scope)
@@ -211,6 +218,7 @@ func clearHistoryHandler(db *sql.DB, tmpl *template.Template, reg *Registry, gua
 			return
 		}
 		if active {
+			unlock()
 			render(collectionsView{Error: activeMessage(label)})
 			return
 		}
@@ -220,10 +228,12 @@ func clearHistoryHandler(db *sql.DB, tmpl *template.Template, reg *Registry, gua
 			return
 		}
 		if counts.Runs == 0 {
+			unlock()
 			render(collectionsView{Message: "There is no history to clear for " + label + "."})
 			return
 		}
 		if r.FormValue("confirm") != "1" {
+			unlock()
 			render(collectionsView{Confirm: &confirmView{
 				Prompt: fmt.Sprintf("Clear %d runs and their insights for %s? Endpoints and saved test configs are kept.", counts.Runs, label),
 				Action: "/history/clear", Target: "closest .slot",
@@ -237,6 +247,7 @@ func clearHistoryHandler(db *sql.DB, tmpl *template.Template, reg *Registry, gua
 			return
 		}
 		w.Header().Set("HX-Trigger", "history-changed")
+		unlock()
 		render(collectionsView{Message: fmt.Sprintf("Cleared %d runs for %s.", n, label)})
 	}
 }

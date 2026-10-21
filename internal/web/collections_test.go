@@ -2,10 +2,12 @@ package web_test
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -294,6 +296,12 @@ func TestStopThenDelete_EventuallySucceeds(t *testing.T) {
 	for {
 		rr := postForm(t, mux, "/collections/"+col.ID+"/delete", url.Values{"confirm": {"1"}})
 		if strings.Contains(rr.Body.String(), "Deleted") {
+			// The stopped run persisted before the delete saw it as finished, so the delete took its row
+			// with it; nothing may re-insert it afterwards.
+			time.Sleep(200 * time.Millisecond)
+			if _, err := store.GetRun(db, runID); err == nil {
+				t.Error("the stopped run's row exists after its collection was deleted")
+			}
 			return
 		}
 		if time.Now().After(deadline) {
@@ -399,6 +407,169 @@ func TestIndex_HasCollectionsPanelClearAllAndRefreshTriggers(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index missing %q", want)
+		}
+	}
+}
+
+// ---- review fixes ------------------------------------------------------------
+
+func TestEndpointPanel_NewEndpointDefaultsToMyEndpoints(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	// "My endpoints" exists but sorts after "Alpha"; a browser would otherwise pick Alpha.
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "x", Name: "x", Method: "GET", URLTemplate: "http://x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateCollection(db, "Alpha", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getPath(t, mux, "/requests/new").Body.String()
+
+	if !strings.Contains(body, `value="`+store.DefaultCollectionID+`" selected`) {
+		t.Errorf("new endpoint does not preselect My endpoints: %s", body)
+	}
+}
+
+func TestEndpointPanel_NewEndpointWithoutDefaultCollectionListsItFirst(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	if _, err := store.CreateCollection(db, "Alpha", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getPath(t, mux, "/requests/new").Body.String()
+
+	mine, alpha := strings.Index(body, `>My endpoints<`), strings.Index(body, ">Alpha<")
+	if mine < 0 || alpha < 0 || mine > alpha {
+		t.Errorf("want a leading My endpoints option before Alpha (mine=%d alpha=%d)", mine, alpha)
+	}
+}
+
+func TestRun_ExistingEndpointKeepsItsCollectionWhenFormOmitsIt(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	srv, _ := baseURLTarget(t)
+	col, _ := store.CreateCollection(db, "Keep", "")
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "ep", Name: "ep", Method: "GET", URLTemplate: srv.URL + "/hello", CollectionID: col.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := postForm(t, mux, "/runs", url.Values{
+		"request_id": {"ep"}, "method": {"GET"}, "url": {srv.URL + "/hello"},
+		"mode": {"burst"}, "concurrency": {"1"}, "total_requests": {"1"}, "burst_count": {"1"},
+	})
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("POST /runs = %d: %s", rr.Code, rr.Body.String())
+	}
+	pollDone(t, mux, runIDFrom(t, rr.Body.String()))
+
+	got, _ := store.GetRequestDefinition(db, "ep")
+	if got.CollectionID != col.ID {
+		t.Errorf("CollectionID = %q, want it kept as %q", got.CollectionID, col.ID)
+	}
+}
+
+func TestRun_DeletedCollectionMessageIsPlain(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	col, _ := store.CreateCollection(db, "Gone", "")
+	if _, err := store.DeleteCollection(db, col.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := postForm(t, mux, "/runs", url.Values{
+		"request_id": {"o"}, "method": {"GET"}, "url": {"http://127.0.0.1:1/x"}, "collection_id": {col.ID},
+		"mode": {"burst"}, "concurrency": {"1"}, "total_requests": {"1"}, "burst_count": {"1"},
+	})
+
+	if !strings.Contains(rr.Body.String(), "no longer exists") || strings.Contains(rr.Body.String(), "GetCollection") {
+		t.Errorf("message = %q, want a plain 'no longer exists'", rr.Body.String())
+	}
+}
+
+// Runs starting while their collection is deleted must never leave an endpoint in a missing
+// collection, or a run whose config is gone. Meaningful under scripts/race.sh.
+func TestRunStartVersusCollectionDelete_LeavesNoOrphans(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	srv, _ := baseURLTarget(t)
+
+	var mu sync.Mutex
+	var accepted []string
+	var wg sync.WaitGroup
+	for i := 0; i < 25; i++ {
+		col, err := store.CreateCollection(db, fmt.Sprintf("Race%d", i), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			rr := postForm(t, mux, "/runs", url.Values{
+				"request_id": {"race-" + col.ID}, "method": {"GET"}, "url": {srv.URL + "/hello"}, "collection_id": {col.ID},
+				"mode": {"burst"}, "concurrency": {"1"}, "total_requests": {"1"}, "burst_count": {"1"},
+			})
+			if rr.Code == http.StatusAccepted {
+				mu.Lock()
+				accepted = append(accepted, runIDFrom(t, rr.Body.String()))
+				mu.Unlock()
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			postForm(t, mux, "/collections/"+col.ID+"/delete", url.Values{"confirm": {"1"}})
+		}()
+	}
+	wg.Wait()
+	for _, id := range accepted {
+		pollDone(t, mux, id)
+	}
+
+	for _, q := range []struct{ what, sql string }{
+		{"endpoints in a missing collection", `SELECT COUNT(*) FROM requests WHERE collection_id NOT IN (SELECT id FROM collections)`},
+		{"configs of a missing endpoint", `SELECT COUNT(*) FROM test_configs WHERE request_id NOT IN (SELECT id FROM requests)`},
+		{"runs of a missing config", `SELECT COUNT(*) FROM runs WHERE test_config_id NOT IN (SELECT id FROM test_configs)`},
+	} {
+		var n int
+		if err := db.QueryRow(q.sql).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("%d %s", n, q.what)
+		}
+	}
+}
+
+// Importing files endpoints under "My endpoints"; a delete of that collection racing the import must not
+// leave them pointing at a collection that is gone. Probabilistic: it can only fail, never mislead.
+func TestImportVersusDefaultCollectionDelete_LeavesNoOrphans(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	const spec = `{"openapi":"3.0.0","info":{"title":"t","version":"1"},"servers":[{"url":"http://x"}],"paths":{"/a":{"get":{"operationId":"op"}}}}`
+
+	for i := 0; i < 40; i++ {
+		if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "seed", Name: "seed", Method: "GET", URLTemplate: "http://x"}); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			postForm(t, mux, "/import", url.Values{"spec_text": {spec}})
+		}()
+		go func() {
+			defer wg.Done()
+			postForm(t, mux, "/collections/"+store.DefaultCollectionID+"/delete", url.Values{"confirm": {"1"}})
+		}()
+		wg.Wait()
+
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM requests WHERE collection_id NOT IN (SELECT id FROM collections)`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatalf("iteration %d: %d endpoints in a missing collection", i, n)
 		}
 	}
 }

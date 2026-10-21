@@ -84,12 +84,27 @@ type panelData struct {
 	HasBody          bool
 	AuthoringEnabled bool
 	Collections      []model.Collection
+	// DefaultOption adds a leading "My endpoints" choice (empty value) when no collection can serve as
+	// the default yet; saving then creates it.
+	DefaultOption bool
 }
 
 func panelDataFor(db *sql.DB, def model.RequestDefinition, isNew, authoringEnabled bool) panelData {
 	collections, err := store.ListCollections(db)
 	if err != nil {
 		log.Printf("web: list collections for builder: %v", err)
+	}
+	// A new endpoint goes to "My endpoints" unless the user picks another. Without a preselection the
+	// browser would pick whichever collection sorts first, possibly a built-in one.
+	defaultOption := false
+	if def.CollectionID == "" {
+		defaultOption = true
+		for _, c := range collections {
+			if c.ID == store.DefaultCollectionID || strings.EqualFold(c.Name, store.DefaultCollectionName) {
+				def.CollectionID, defaultOption = c.ID, false
+				break
+			}
+		}
 	}
 	var body string
 	if def.Body != nil {
@@ -107,7 +122,7 @@ func panelDataFor(db *sql.DB, def model.RequestDefinition, isNew, authoringEnabl
 	return panelData{
 		Def: def, BodyStr: body, HeadersJSON: string(headers),
 		AuthzOverride: override, IsNew: isNew, HasBody: def.Body != nil && len(def.Body.Raw) > 0,
-		AuthoringEnabled: authoringEnabled, Collections: collections,
+		AuthoringEnabled: authoringEnabled, Collections: collections, DefaultOption: defaultOption,
 	}
 }
 
@@ -127,7 +142,7 @@ func requestPanelHandler(db *sql.DB, tmpl *template.Template, authoringEnabled b
 	}
 }
 
-func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool) http.HandlerFunc {
+func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool, guard *scopeGuard) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		specURL := strings.TrimSpace(r.FormValue("spec_url"))
 		specText := strings.TrimSpace(r.FormValue("spec_text"))
@@ -154,12 +169,16 @@ func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool) h
 			return
 		}
 
+		// Saving may create "My endpoints"; a delete of it must not land between that and the insert.
+		guard.mu.Lock()
 		for i := range defs {
 			if err := store.SaveRequestDefinition(db, defs[i]); err != nil {
+				guard.mu.Unlock()
 				http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
+		guard.mu.Unlock()
 
 		data, err := loadSidebarData(db)
 		if err != nil {

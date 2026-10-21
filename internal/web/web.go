@@ -87,9 +87,10 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /requests/{id}/payloads/generate", postGeneratePayloadsHandler(db, generator))
 	mux.HandleFunc("POST /nl/request", postNLRequestHandler(db, generator))
 	mux.HandleFunc("POST /nl/testconfig", postNLTestConfigHandler(db, generator, bounds))
-	mux.HandleFunc("POST /import", importHandler(db, tmpl, generator != nil))
-	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
+	// Serializes starting a run, importing endpoints and deleting or clearing a scope.
 	guard := &scopeGuard{}
+	mux.HandleFunc("POST /import", importHandler(db, tmpl, generator != nil, guard))
+	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
 	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg, guard))
 	mux.HandleFunc("GET /collections", collectionsPanelHandler(db, tmpl))
 	mux.HandleFunc("POST /collections", createCollectionHandler(db, tmpl))

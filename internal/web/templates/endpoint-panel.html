@@ -42,7 +42,7 @@
   <label style="margin-bottom:.5rem">
     <span>Collection</span>
     <select name="collection_id">
-      {{if not .Collections}}<option value="">My endpoints</option>{{end}}
+      {{if .DefaultOption}}<option value="" selected>My endpoints</option>{{end}}
       {{range .Collections}}<option value="{{.ID}}" {{if eq .ID $.Def.CollectionID}}selected{{end}}>{{.Name}}</option>{{end}}
     </select>
   </label>

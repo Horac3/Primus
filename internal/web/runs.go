@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Horac3/Primus/internal/author"
@@ -44,10 +45,21 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *s
 		// From here until the run is registered, a delete or clear of this endpoint's scope must not
 		// slip in: it would either miss the run or leave the endpoint in a deleted collection.
 		guard.mu.Lock()
-		defer guard.mu.Unlock()
+		unlock := sync.OnceFunc(guard.mu.Unlock)
+		defer unlock()
+		// A form that omits the collection must not move an existing endpoint to "My endpoints".
+		if def.CollectionID == "" && def.ID != "" {
+			if existing, err := store.GetRequestDefinition(db, def.ID); err == nil {
+				def.CollectionID = existing.CollectionID
+			}
+		}
 		if def.CollectionID != "" {
 			if _, err := store.GetCollection(db, def.CollectionID); err != nil {
-				http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+				if errors.Is(err, store.ErrNoSuchCollection) {
+					http.Error(w, "invalid request: that collection no longer exists", http.StatusBadRequest)
+					return
+				}
+				http.Error(w, "invalid request: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
@@ -132,6 +144,8 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *s
 			run.ID = runID
 			return run, nil
 		})
+		// The run is registered, so a delete now sees it. Write the response without holding the guard.
+		unlock()
 
 		w.WriteHeader(http.StatusAccepted)
 		renderTemplate(w, tmpl, "running.html", runningData{RunID: runID, Detail: detail})

@@ -15,7 +15,9 @@ primus run <config.json> [--db <path>]
   the spec through the web UI first, or share the UI's DB file.
 - If the endpoint's URL starts with `{{base_url}}`, the CLI resolves it from the
   endpoint's collection in the same DB, exactly as the web UI does (see
-  [load](load.md#collections-and-base_url)). A collection with no base URL exits `2`.
+  [load](load.md)). A collection with no base URL exits `2`. The running server
+  cannot see CLI runs, so do not delete or clear history in the web UI while a
+  CLI run on the same DB file is in progress.
 - `--db` — SQLite file, default `primus.db` (same default the server uses).
 - Global auth comes from the same DB — set it in the UI once, or leave it
   unset for anonymous targets.
