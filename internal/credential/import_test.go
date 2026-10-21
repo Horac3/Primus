@@ -224,12 +224,64 @@ func TestIsSecretField(t *testing.T) {
 	}
 }
 
+func TestIsSecretField_MatchesWholeWordsOnly(t *testing.T) {
+	cases := map[string]bool{
+		"password": true, "api_key": true, "apiKey": true, "client-secret": true, "otp": true, "PIN": true,
+		"shipping": false, "monkey": false, "username": false, "email": false, "keyboard_layout": false,
+		"password2": true, "user_pin1": true, "accesstoken": true, "passcode": true,
+	}
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			// Act
+			got := credential.IsSecretField(name)
+
+			// Assert
+			if got != want {
+				t.Errorf("IsSecretField(%q) = %v, want %v", name, got, want)
+			}
+		})
+	}
+}
+
+func TestDefaultMaskedFields_ReturnsSecretNamesSorted(t *testing.T) {
+	// Arrange
+	fields := []string{"username", "password", "shipping", "apiKey", "email", "otp"}
+
+	// Act
+	got := credential.DefaultMaskedFields(fields)
+
+	// Assert
+	want := []string{"apiKey", "otp", "password"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("DefaultMaskedFields = %v, want %v", got, want)
+	}
+}
+
+func TestMask_HidesExactlyTheFlaggedFields(t *testing.T) {
+	// Arrange
+	c := model.Credential{"username": "alice", "nickname": "ally", "password": "pw-a"}
+
+	// Act
+	masked := credential.Mask(c, []string{"nickname"})
+
+	// Assert
+	if masked["nickname"] != credential.MaskedValue {
+		t.Errorf("nickname = %q, want it masked", masked["nickname"])
+	}
+	if masked["password"] != "pw-a" || masked["username"] != "alice" {
+		t.Errorf("masked = %v, want unflagged fields kept", masked)
+	}
+	if c["nickname"] != "ally" {
+		t.Error("Mask modified its input")
+	}
+}
+
 func TestMask_HidesSecretsAndKeepsIdentity(t *testing.T) {
 	// Arrange
 	c := model.Credential{"username": "alice", "password": "pw-a", "client_secret": "cs"}
 
 	// Act
-	masked := credential.Mask(c)
+	masked := credential.Mask(c, []string{"password", "client_secret"})
 
 	// Assert
 	if masked["username"] != "alice" {

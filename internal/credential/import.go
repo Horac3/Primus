@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/Horac3/Primus/internal/model"
 )
@@ -190,29 +193,83 @@ func (d *duplicateTracker) check(c model.Credential, row int) []RowIssue {
 	return nil
 }
 
-// secretFieldMarkers are substrings that mark a field name as secret.
-var secretFieldMarkers = []string{"pass", "secret", "token", "key", "pin", "otp"}
+// secretFieldWords are whole words that mark a field name as secret.
+var secretFieldWords = map[string]bool{
+	"password": true, "passwd": true, "pwd": true, "pass": true, "passphrase": true,
+	"secret": true, "token": true, "key": true, "apikey": true, "pin": true, "otp": true,
+	// Common run-together compounds that a lowercase name never splits.
+	"accesstoken": true, "authtoken": true, "clientsecret": true, "passcode": true, "pincode": true,
+	"newpassword": true,
+}
 
-// IsSecretField reports whether a credential field holds a secret, judged
-// by its name (password, client_secret, api_key, access_token, ...).
+// IsSecretField reports whether a credential field name contains a secret
+// word as a whole word (password, client_secret, apiKey, access-token, PIN),
+// so names like shipping or keyboard_layout are not caught by accident.
 func IsSecretField(name string) bool {
-	lower := strings.ToLower(name)
-	for _, marker := range secretFieldMarkers {
-		if strings.Contains(lower, marker) {
+	for _, word := range fieldWords(name) {
+		if secretFieldWords[word] {
 			return true
 		}
 	}
 	return false
 }
 
+// DefaultMaskedFields returns, sorted, the fields an imported pool masks by
+// default: those whose names IsSecretField flags. The user can change it.
+func DefaultMaskedFields(fields []string) []string {
+	var masked []string
+	for _, f := range fields {
+		if IsSecretField(f) {
+			masked = append(masked, f)
+		}
+	}
+	sort.Strings(masked)
+	return masked
+}
+
+// fieldWords splits a field name into lowercase words on non-alphanumerics,
+// letter-digit and camelCase boundaries: "apiKey" → api, key; "pin1" → pin, 1;
+// "PIN" stays one word.
+func fieldWords(name string) []string {
+	var words []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			words = append(words, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	runes := []rune(name)
+	for i, r := range runes {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			flush()
+			continue
+		}
+		if len(cur) > 0 && unicode.IsDigit(r) != unicode.IsDigit(runes[i-1]) {
+			flush() // letters and digits split: password2 → password, 2
+		}
+		if unicode.IsUpper(r) && len(cur) > 0 {
+			prev := runes[i-1]
+			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) || (unicode.IsUpper(prev) && nextLower) {
+				flush()
+			}
+		}
+		cur = append(cur, r)
+	}
+	flush()
+	return words
+}
+
 // MaskedValue replaces secret values in read APIs.
 const MaskedValue = "••••••"
 
-// Mask returns a copy of c with every secret field's value hidden.
-func Mask(c model.Credential) model.Credential {
+// Mask returns a copy of c with the value of every field named in masked
+// hidden. The list is the pool's stored per-field flags, not a name guess.
+func Mask(c model.Credential, masked []string) model.Credential {
 	out := make(model.Credential, len(c))
 	for name, value := range c {
-		if IsSecretField(name) {
+		if slices.Contains(masked, name) {
 			value = MaskedValue
 		}
 		out[name] = value

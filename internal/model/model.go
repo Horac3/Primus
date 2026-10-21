@@ -178,14 +178,18 @@ const (
 // each one in and how to send the resulting token. Primus never creates
 // accounts on the target.
 type CredentialPool struct {
-	ID               string       `json:"id"`
-	Name             string       `json:"name"`
-	Credentials      []Credential `json:"credentials,omitempty"`
-	Login            LoginSpec    `json:"login"`
-	Apply            ApplySpec    `json:"apply"`
-	AllowReuse       bool         `json:"allow_reuse,omitempty"`
-	LoginConcurrency int          `json:"login_concurrency,omitempty"`
-	ReloginOn401     bool         `json:"relogin_on_401,omitempty"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Credentials []Credential `json:"credentials,omitempty"`
+	// MaskedFields names the credential fields every read except the
+	// engine's dispatch read hides. No omitempty: a stored [] means "none
+	// masked", while an absent key marks a pool from before per-field flags.
+	MaskedFields     []string  `json:"masked_fields"`
+	Login            LoginSpec `json:"login"`
+	Apply            ApplySpec `json:"apply"`
+	AllowReuse       bool      `json:"allow_reuse,omitempty"`
+	LoginConcurrency int       `json:"login_concurrency,omitempty"`
+	ReloginOn401     bool      `json:"relogin_on_401,omitempty"`
 }
 
 // LoginOutcome is one worker's login attempt. It carries no secrets: the

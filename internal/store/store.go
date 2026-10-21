@@ -85,7 +85,7 @@ func Migrate(db *sql.DB) error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
-	return nil
+	return migrateMaskedFields(db)
 }
 
 // SaveRequestDefinition inserts or replaces a RequestDefinition.

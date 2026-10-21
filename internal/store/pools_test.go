@@ -86,6 +86,101 @@ func TestCredentialPool_MaskedReadHidesPasswords(t *testing.T) {
 	}
 }
 
+func TestCredentialPool_MaskedReadFollowsStoredFlags(t *testing.T) {
+	// Arrange
+	db := migratedDB(t)
+	pool := samplePool()
+	pool.Credentials = []model.Credential{{"username": "alice", "password": "pw-alice", "nickname": "ally"}}
+	pool.MaskedFields = []string{"nickname"}
+	if err := store.SaveCredentialPool(db, pool); err != nil {
+		t.Fatalf("SaveCredentialPool: %v", err)
+	}
+
+	// Act
+	masked, err := store.GetCredentialPoolMasked(db, pool.ID)
+	if err != nil {
+		t.Fatalf("GetCredentialPoolMasked: %v", err)
+	}
+	real, err := store.GetCredentialPoolWithSecrets(db, pool.ID)
+	if err != nil {
+		t.Fatalf("GetCredentialPoolWithSecrets: %v", err)
+	}
+
+	// Assert
+	if masked.Credentials[0]["nickname"] == "ally" {
+		t.Error("flagged nickname is readable in the masked read")
+	}
+	if masked.Credentials[0]["password"] != "pw-alice" {
+		t.Errorf("unflagged password = %q, want it readable", masked.Credentials[0]["password"])
+	}
+	if real.Credentials[0]["nickname"] != "ally" {
+		t.Errorf("dispatch read nickname = %q, want the real value", real.Credentials[0]["nickname"])
+	}
+	if strings.Join(masked.MaskedFields, ",") != "nickname" {
+		t.Errorf("MaskedFields = %v, want [nickname]", masked.MaskedFields)
+	}
+}
+
+func TestCredentialPool_NilFlagsMaskLikeTheMigration(t *testing.T) {
+	// Arrange: no stored flags; the next Migrate would apply the old rule.
+	db := migratedDB(t)
+	pool := samplePool()
+	pool.Credentials = []model.Credential{{"username": "alice", "shipping": "addr-1"}}
+	if err := store.SaveCredentialPool(db, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	// Act
+	got, err := store.GetCredentialPoolMasked(db, pool.ID)
+
+	// Assert
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Credentials[0]["shipping"] == "addr-1" {
+		t.Error("shipping is readable before migration but masked after it; want the same masking both times")
+	}
+}
+
+func TestMigrate_KeepsOldRuleMaskingForExistingPools(t *testing.T) {
+	// Arrange: a pool stored before per-field flags (payload has no masked_fields).
+	db := migratedDB(t)
+	if _, err := db.Exec(`INSERT INTO credential_pools (id, name, payload) VALUES ('old', 'old', '{"id":"old","name":"old"}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO credentials (pool_id, idx, fields) VALUES ('old', 0, '{"username":"u","password":"p","shipping":"s"}')`); err != nil {
+		t.Fatal(err)
+	}
+	empty := samplePool()
+	empty.ID, empty.MaskedFields = "none-masked", []string{}
+	if err := store.SaveCredentialPool(db, empty); err != nil {
+		t.Fatal(err)
+	}
+
+	// Act: Migrate twice, as two restarts would.
+	for range 2 {
+		if err := store.Migrate(db); err != nil {
+			t.Fatalf("Migrate: %v", err)
+		}
+	}
+
+	// Assert
+	old, err := store.GetCredentialPoolWithSecrets(db, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(old.MaskedFields, ","); got != "password,shipping" {
+		t.Errorf("migrated MaskedFields = %q, want password,shipping (the old substring rule)", got)
+	}
+	kept, err := store.GetCredentialPoolWithSecrets(db, "none-masked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.MaskedFields == nil || len(kept.MaskedFields) != 0 {
+		t.Errorf("MaskedFields = %#v, want the stored empty list kept", kept.MaskedFields)
+	}
+}
+
 func TestCredentialPool_SaveReplacesCredentials(t *testing.T) {
 	// Arrange
 	db := migratedDB(t)

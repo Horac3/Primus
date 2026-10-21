@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/Horac3/Primus/internal/credential"
 	"github.com/Horac3/Primus/internal/model"
@@ -69,6 +71,86 @@ func SaveCredentialPool(db *sql.DB, p model.CredentialPool) error {
 	return tx.Commit()
 }
 
+// legacySecretMarkers is the substring rule masking used before per-field
+// flags. migrateMaskedFields uses it so existing pools keep what they hid.
+var legacySecretMarkers = []string{"pass", "secret", "token", "key", "pin", "otp"}
+
+func legacySecretField(name string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range legacySecretMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveMaskedFields is the pool's stored list or, for a pool with no
+// stored list (nil), the old substring rule's fields, sorted: the same set
+// migrateMaskedFields will store, so masking does not change on restart.
+func EffectiveMaskedFields(p model.CredentialPool) []string {
+	if p.MaskedFields != nil {
+		return p.MaskedFields
+	}
+	masked := []string{}
+	for _, name := range fieldNames(p.Credentials) {
+		if legacySecretField(name) {
+			masked = append(masked, name)
+		}
+	}
+	sort.Strings(masked)
+	return masked
+}
+
+// migrateMaskedFields gives every pool stored without masked_fields the
+// fields the old substring rule masked. Pools that have a list are skipped,
+// so it runs once per pool.
+func migrateMaskedFields(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id FROM credential_pools WHERE json_type(payload, '$.masked_fields') IS NOT 'array'`)
+	if err != nil {
+		return fmt.Errorf("migrate masked fields: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("migrate masked fields: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("migrate masked fields: %w", err)
+	}
+	for _, id := range ids {
+		p, err := GetCredentialPoolWithSecrets(db, id)
+		if err != nil {
+			return fmt.Errorf("migrate masked fields: %w", err)
+		}
+		p.MaskedFields = EffectiveMaskedFields(p) // nil here: no stored list
+		if err := SaveCredentialPoolSpec(db, p); err != nil {
+			return fmt.Errorf("migrate masked fields: %w", err)
+		}
+	}
+	return nil
+}
+
+// fieldNames lists each distinct field name across creds, in first-seen order.
+func fieldNames(creds []model.Credential) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, c := range creds {
+		for name := range c {
+			if !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
 // SaveCredentialPoolSpec updates the pool's name, login and apply settings,
 // keeping its stored credentials. The pool must already exist.
 func SaveCredentialPoolSpec(db *sql.DB, p model.CredentialPool) error {
@@ -117,14 +199,16 @@ func GetCredentialPoolWithSecrets(db *sql.DB, id string) (model.CredentialPool, 
 	return p, rows.Err()
 }
 
-// GetCredentialPoolMasked loads a pool with secret fields masked.
+// GetCredentialPoolMasked loads a pool with its flagged fields masked. A pool
+// with no stored flags (nil) masks the fields whose names look secret.
 func GetCredentialPoolMasked(db *sql.DB, id string) (model.CredentialPool, error) {
 	p, err := GetCredentialPoolWithSecrets(db, id)
 	if err != nil {
 		return model.CredentialPool{}, err
 	}
+	masked := EffectiveMaskedFields(p)
 	for i, c := range p.Credentials {
-		p.Credentials[i] = credential.Mask(c)
+		p.Credentials[i] = credential.Mask(c, masked)
 	}
 	return p, nil
 }
