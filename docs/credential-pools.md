@@ -137,12 +137,24 @@ time.
 
 ## Secrets
 
-- Passwords, secrets and tokens are masked in the UI once saved. Fields
-  are masked by name: anything containing `pass`, `secret`, `token`, `key`,
-  `pin` or `otp`.
-- They are never written to the server log or the run record, and never
-  printed by `primus run`. Login failures are reported as short classes,
-  never as raw responses.
+- Masking is set per field. Under the preview table, **Masked fields** has a
+  "Mask this value" box for each field; tick or untick it and press
+  **Save masked fields**. A masked value shows as `••••••` everywhere except
+  the login request itself, and an unmasked one shows only after you save.
+- On import, a field is masked by default when its name contains a secret
+  word as a whole word: `password`, `passwd`, `pwd`, `pass`, `passphrase`,
+  `secret`, `token`, `key`, `apikey`, `pin` or `otp`, or is one of
+  `accesstoken`, `authtoken`, `clientsecret`, `newpassword`, `passcode`
+  or `pincode`. Words are split on `_`, `-`, spaces, digits and camelCase,
+  so `api_key`, `apiKey`, `client-secret`, `password2` and `PIN` are
+  masked, while `shipping`, `monkey` and `keyboard_layout` are not. Mask
+  any other field (say `nickname`) by ticking it.
+- Pools created before per-field masking keep every field the old rule
+  masked (any name containing `pass`, `secret`, `token`, `key`, `pin` or
+  `otp`). Untick the ones that are not secret.
+- Masked fields, passwords and tokens are never written to the server log
+  or the run record, and never printed by `primus run`. Login failures are
+  reported as short classes, never as raw responses.
 - The AI analyzer only receives login counts (attempted, succeeded,
   failed). It never sees pool names, credentials or tokens.
 - Credentials are stored in plain text in the SQLite file, the same as

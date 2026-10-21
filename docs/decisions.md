@@ -69,3 +69,17 @@ Context: The kit keeps `progress.md`, `decisions.md`, `requirements.md` and `arc
 `//go:embed *.md` would have embedded them in the shipped binary.
 Decision: `docs/docs.go` embeds an explicit list of the public pages.
 Consequences: A new public page must be added to both the embed list and `order`.
+
+## D-009: Credential masking is a stored per-field flag, defaulted by whole-word names
+Date: 2026-10-21
+Status: accepted
+Context: Masking by substring on the field name over-masked (`shipping`, `keyboard_layout`) and could not hide an
+ordinary-named field (`nickname`). FR-CRED-01..04.
+Decision: `CredentialPool.MaskedFields` (JSON `masked_fields`, no omitempty) lives in the pool spec. Import sets it
+from `credential.DefaultMaskedFields` (whole-word match after splitting on separators and camelCase). The panel's
+`POST /pools/{id}/masking` replaces it. `store.Migrate` gives pools without the key the old substring rule's fields,
+once. A nil list (never stored) masks by that same old rule on read (`store.EffectiveMaskedFields`), so masking does
+not change across the restart that migrates it.
+Consequences: `GetCredentialPoolMasked` is the masked read; `GetCredentialPoolWithSecrets` stays the engine's only
+unmasked read. Concurrent spec and masking saves each rewrite the whole payload, so one can undo the other (single user;
+deferred).
