@@ -242,3 +242,201 @@ func TestResolveURL(t *testing.T) {
 		t.Errorf("input mutated: %q, %v", in.URLTemplate, err)
 	}
 }
+
+// history fixture: collection A holds endpoints a1 and a2, collection B holds b1. Every endpoint has
+// one config and two runs, and every run has an insight.
+type fixture struct {
+	db   *sql.DB
+	a, b model.Collection
+}
+
+func newFixture(t *testing.T) fixture {
+	t.Helper()
+	db := migrated(t)
+	a, _ := store.CreateCollection(db, "A", "")
+	b, _ := store.CreateCollection(db, "B", "")
+	for _, ep := range []struct{ id, col string }{{"a1", a.ID}, {"a2", a.ID}, {"b1", b.ID}} {
+		if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: ep.id, Name: ep.id, Method: "GET", URLTemplate: "http://x/" + ep.id, CollectionID: ep.col}); err != nil {
+			t.Fatal(err)
+		}
+		cfgID := "cfg-" + ep.id
+		if err := store.SaveTestConfig(db, model.TestConfig{ID: cfgID, RequestID: ep.id, Mode: model.ModeLoad, Concurrency: 1, TotalRequests: 1}); err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range []string{"1", "2"} {
+			runID := "run-" + ep.id + "-" + n
+			if err := store.SaveRun(db, model.Run{ID: runID, TestConfigID: cfgID}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := store.StartInsight(db, runID, "rules", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := store.SaveCredentialPool(db, model.CredentialPool{ID: "pool1", Name: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	return fixture{db: db, a: a, b: b}
+}
+
+func (f fixture) runExists(id string) bool {
+	_, err := store.GetRun(f.db, id)
+	return err == nil
+}
+
+func (f fixture) insightExists(runID string) bool {
+	_, err := store.GetInsight(f.db, runID)
+	return err == nil
+}
+
+func TestCountScope(t *testing.T) {
+	f := newFixture(t)
+	tests := []struct {
+		label     string
+		scope     store.Scope
+		eps, runs int
+	}{
+		{"collection", store.Scope{Kind: store.ScopeCollection, ID: f.a.ID}, 2, 4},
+		{"endpoint", store.Scope{Kind: store.ScopeEndpoint, ID: "b1"}, 1, 2},
+		{"all", store.Scope{Kind: store.ScopeAll}, 3, 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			got, err := store.CountScope(f.db, tt.scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Endpoints != tt.eps || got.Runs != tt.runs {
+				t.Errorf("counts = %+v, want %d endpoints, %d runs", got, tt.eps, tt.runs)
+			}
+		})
+	}
+}
+
+func TestDeleteCollection_RemovesOnlyThatCollection(t *testing.T) {
+	f := newFixture(t)
+
+	got, err := store.DeleteCollection(f.db, f.a.ID)
+	if err != nil {
+		t.Fatalf("DeleteCollection: %v", err)
+	}
+
+	if got.Endpoints != 2 || got.Runs != 4 {
+		t.Errorf("deleted counts = %+v, want 2 endpoints, 4 runs", got)
+	}
+	if _, err := store.GetCollection(f.db, f.a.ID); !errors.Is(err, store.ErrNoSuchCollection) {
+		t.Errorf("collection A still there: %v", err)
+	}
+	for _, id := range []string{"a1", "a2"} {
+		if _, err := store.GetRequestDefinition(f.db, id); err == nil {
+			t.Errorf("endpoint %s survived", id)
+		}
+		if _, err := store.GetTestConfig(f.db, "cfg-"+id); err == nil {
+			t.Errorf("config of %s survived", id)
+		}
+		for _, n := range []string{"1", "2"} {
+			if f.runExists("run-"+id+"-"+n) || f.insightExists("run-"+id+"-"+n) {
+				t.Errorf("run or insight %s-%s survived", id, n)
+			}
+		}
+	}
+	// B, its history and the credential pools are untouched.
+	if _, err := store.GetRequestDefinition(f.db, "b1"); err != nil {
+		t.Errorf("b1 gone: %v", err)
+	}
+	if !f.runExists("run-b1-1") || !f.insightExists("run-b1-2") {
+		t.Error("B's runs or insights were deleted")
+	}
+	if _, err := store.GetCredentialPoolMasked(f.db, "pool1"); err != nil {
+		t.Errorf("credential pool gone: %v", err)
+	}
+}
+
+func TestDeleteCollection_Tombstone(t *testing.T) {
+	f := newFixture(t)
+	// A built-in collection, as the seeder (C2) will create it.
+	if _, err := f.db.Exec(`UPDATE collections SET seed_id = 'jsonplaceholder', seed_version = 1 WHERE id = ?`, f.b.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.DeleteCollection(f.db, f.a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if tomb, _ := store.Tombstoned(f.db, "jsonplaceholder"); tomb {
+		t.Error("deleting a user collection wrote a tombstone")
+	}
+	if _, err := store.DeleteCollection(f.db, f.b.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if tomb, err := store.Tombstoned(f.db, "jsonplaceholder"); err != nil || !tomb {
+		t.Errorf("Tombstoned = %v, %v; want true after deleting the built-in", tomb, err)
+	}
+}
+
+func TestDeleteCollection_UnknownIDIsAnError(t *testing.T) {
+	f := newFixture(t)
+	if _, err := store.DeleteCollection(f.db, "nope"); !errors.Is(err, store.ErrNoSuchCollection) {
+		t.Errorf("err = %v, want ErrNoSuchCollection", err)
+	}
+}
+
+func TestClearHistory_KeepsEndpointsAndConfigs(t *testing.T) {
+	f := newFixture(t)
+	tests := []struct {
+		label   string
+		scope   store.Scope
+		cleared int
+		gone    []string
+		kept    []string
+	}{
+		{"endpoint", store.Scope{Kind: store.ScopeEndpoint, ID: "a1"}, 2, []string{"run-a1-1", "run-a1-2"}, []string{"run-a2-1", "run-b1-1"}},
+		{"collection", store.Scope{Kind: store.ScopeCollection, ID: f.a.ID}, 2, []string{"run-a2-1", "run-a2-2"}, []string{"run-b1-1"}},
+		{"all", store.Scope{Kind: store.ScopeAll}, 2, []string{"run-b1-1", "run-b1-2"}, nil},
+	}
+	// Each scope is applied in order on the same database; "cleared" is what remained in that scope.
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			n, err := store.ClearHistory(f.db, tt.scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n != tt.cleared {
+				t.Errorf("cleared = %d, want %d", n, tt.cleared)
+			}
+			for _, id := range tt.gone {
+				if f.runExists(id) || f.insightExists(id) {
+					t.Errorf("%s or its insight survived", id)
+				}
+			}
+			for _, id := range tt.kept {
+				if !f.runExists(id) || !f.insightExists(id) {
+					t.Errorf("%s or its insight was removed", id)
+				}
+			}
+		})
+	}
+	for _, id := range []string{"a1", "a2", "b1"} {
+		if _, err := store.GetRequestDefinition(f.db, id); err != nil {
+			t.Errorf("endpoint %s removed by clear: %v", id, err)
+		}
+		if _, err := store.GetTestConfig(f.db, "cfg-"+id); err != nil {
+			t.Errorf("config of %s removed by clear: %v", id, err)
+		}
+	}
+	// Nothing left: clearing again reports zero and changes nothing.
+	if n, err := store.ClearHistory(f.db, store.Scope{Kind: store.ScopeAll}); err != nil || n != 0 {
+		t.Errorf("second clear = %d, %v; want 0, nil", n, err)
+	}
+}
+
+func TestScopeRequestIDs(t *testing.T) {
+	f := newFixture(t)
+	got, err := store.ScopeRequestIDs(f.db, store.Scope{Kind: store.ScopeCollection, ID: f.a.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("ids = %v, want a1 and a2", got)
+	}
+}
