@@ -83,7 +83,7 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
   <thead><tr><th>Failure cause</th><th>Count</th></tr></thead>
   <tbody>
   {{range .Summary.ErrorDetails}}
-  <tr><td style="overflow-wrap:anywhere">{{.Cause}}</td><td>{{.Count}}</td></tr>
+  <tr><td style="overflow-wrap:anywhere">{{redact .Cause}}</td><td>{{.Count}}</td></tr>
   {{end}}
   </tbody>
 </table>

@@ -14,7 +14,7 @@
   <table style="margin-top:.5rem">
     <thead><tr><th>Login failure reason</th><th>Count</th></tr></thead>
     <tbody>
-    {{range .FailureReasons}}<tr><td style="overflow-wrap:anywhere">{{.Cause}}</td><td>{{.Count}}</td></tr>{{end}}
+    {{range .FailureReasons}}<tr><td style="overflow-wrap:anywhere">{{redact .Cause}}</td><td>{{.Count}}</td></tr>{{end}}
     </tbody>
   </table>
   {{end}}

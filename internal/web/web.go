@@ -41,7 +41,8 @@ func last4(s string) string {
 
 // templateFuncs are helpers available inside every template.
 var templateFuncs = template.FuncMap{
-	"mul": func(a, b float64) float64 { return a * b },
+	"mul":    func(a, b float64) float64 { return a * b },
+	"redact": redactURLs,
 	"outcomeClass": func(o model.RunOutcome) string {
 		switch o {
 		case model.OutcomePass:
