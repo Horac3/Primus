@@ -129,3 +129,62 @@ Decision: D-016. Provisioning is a user-started pool action, never part of a run
   requests); provisioned rows are ordinary pool rows.
 - **FR-PROV-07** — `docs/credential-pools.md` documents provisioning, its limits (no account deletion on the target,
   no email verification, no captcha) and that accounts stay on the target; it no longer says Primus never signs up.
+
+## Collections (COLL)
+Decision: D-017.
+- **FR-COLL-01** — A user sees endpoints grouped by collection in the sidebar; each collection can be expanded or collapsed.
+  - Given two collections, when the page loads, then each lists its own endpoints and the expanded state survives a reload.
+  - Edge: an empty collection shows "no endpoints yet" and an add-endpoint control.
+- **FR-COLL-02** — On upgrade, existing endpoints move into a collection named "My endpoints".
+  - Given a database from before collections, when the app starts, then every endpoint, run and insight is still reachable.
+  - Edge: running the migration twice changes nothing.
+- **FR-COLL-03** — A user can create, rename and set the base URL of a collection; new endpoints are created inside a chosen collection.
+  - Edge: a duplicate or empty name is rejected with a message.
+- **FR-COLL-04** — A user can delete a collection.
+  - Given a collection with 8 endpoints and 12 runs, when the user confirms the prompt that states "8 endpoints, 12 runs", then all of them are gone.
+  - Edge: refused with a clear message if any run in it is active; nothing is deleted.
+- **FR-COLL-05** — A user can clear history for one endpoint, one collection, or everything.
+  - Given runs exist, when the user confirms (prompt shows the count), then runs and insights are removed and endpoints and configs remain.
+  - Edge: refused while a run in scope is active. Clearing when there is no history says so and does nothing.
+- **FR-COLL-06** — Built-in collections can be deleted and restored.
+  - Given the built-in collection was deleted, when the app restarts, then it does not reappear; when the user picks "Restore examples", it does.
+  - Edge: restoring when it already exists reports "already present" and changes nothing.
+- **FR-COLL-07** — A user can run every endpoint in a collection, one after another, using each endpoint's saved test config, and stop the whole sequence.
+  - Edge: an endpoint without a saved config is skipped and listed as skipped. Stop cancels the current run and the rest.
+- **FR-COLL-08** — Importing an OpenAPI spec creates a collection named from the spec's title and puts the imported endpoints in it.
+  - Edge: a title that already exists gets a numeric suffix.
+
+## Seed data (SEED)
+- **FR-SEED-01** — A fresh install contains a built-in collection "JSONPlaceholder" with about 20 endpoints covering
+  `/posts`, `/comments`, `/albums`, `/photos`, `/todos` and `/users`: list, get by id, a 404 case (`/posts/9999`),
+  nested routes (`/posts/1/comments`, `/users/1/posts`), query filters (`/comments?postId=1`, `/todos?completed=false`),
+  and POST, PUT, PATCH, DELETE on `/posts`.
+- **FR-SEED-02** — Every seeded endpoint has a modest saved test config (for example 20 requests, concurrency 2) and
+  assertions that match the real behaviour: 200 for reads, 201 for create, 404 for the missing id, and a loose p95 limit.
+  - Edge: the large `/photos` list gets a higher latency limit and a note about payload size.
+- **FR-SEED-03** — Each seeded endpoint carries a short note a reader can learn from, and the writes say the server
+  fakes them (create returns 201 but the record is not stored, so a following GET returns 404).
+- **FR-SEED-04** — Seeding is idempotent and never overwrites user edits; the collection's `base_url` is
+  `https://jsonplaceholder.typicode.com` and can be changed.
+- **FR-SEED-05** — A public docs page `docs/collections.md` explains the built-in collection, its fake writes, that it
+  is a third-party free service run by someone else (keep load low, only test what you are allowed to), and links to
+  jsonplaceholder.typicode.com. It is added to the embed list and to `order` in `docs/docs.go`.
+
+## Per-endpoint reports (REP)
+- **FR-REP-01** — Each endpoint has a report page showing: method, URL, collection, the latest run's summary, a table of
+  the last 10 runs (time, requests, p50, p95, p99, error %, throughput, cancelled, verdict), and findings.
+  - Edge: no runs yet shows "no runs yet" and a run button.
+- **FR-REP-02** — Every report includes a fixed "how to read this" key defining: p50, p95, p99, error rate, throughput,
+  concurrency versus requests per second, cancelled requests, login latency (when a pool is active), and the three verdicts.
+  - Edge: the key is the same text for every endpoint and is not produced by the model.
+- **FR-REP-03** — A collection page lists its endpoints in a table: last verdict, p95, error %, last run time, with a link to each report.
+  - Edge: an endpoint never run shows `-` in every column.
+
+## Richer insights (INS)
+- **FR-INS-01** — Per-endpoint insights have fixed sections: "What the numbers say", "Likely causes", "What to try next".
+  The rules analyzer and Ollama produce the same sections, and the UI says which analyzer wrote them.
+- **FR-INS-02** — Ollama sections are grounded: any number they quote must match the supplied aggregates (tolerant
+  comparison); otherwise the endpoint falls back to the rules analyzer for that report.
+  - Edge: only aggregates and normalized URLs are sent; never bodies, headers, credentials or tokens.
+- **FR-INS-03** — Insights may compare against the endpoint's previous runs, using aggregates only (for example "p95 rose from 120 ms to 310 ms").
+  - Edge: with one run there is no comparison section.

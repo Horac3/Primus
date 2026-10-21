@@ -209,3 +209,35 @@ Consequences:
   and stop saying "Primus never signs up".
 - Watch for: a generated secret showing up in a log or error message, and partial pools after Stop.
 Revisit if: users need fresh accounts on every run, or need provisioned accounts deleted after a run.
+
+## D-017: Collections, seed data and per-endpoint reports
+Date: 2026-10-21
+Status: accepted
+Context: Endpoints are a flat list. A new user starts with nothing to try, there is no per-endpoint summary, and
+insights are a single free-text blob per run. Request URLs are stored as full `url_template` strings and used as-is
+by `execRequest` and `Probe`, so a whole group of endpoints cannot be pointed at another host (such as an `httptest`
+server) without editing each one.
+Decision:
+- A **collection** is a named set of endpoints. Every endpoint belongs to exactly one collection. A collection has an
+  optional `base_url`; endpoint URLs may start with `{{base_url}}`, resolved at dispatch and probe time. This also lets
+  tests point a whole collection at an `httptest` server, so no test touches the real network.
+- Existing endpoints migrate into one non-built-in collection called "My endpoints". Nothing is lost.
+- **Built-in** collections come from embedded JSON (`internal/seed`), seeded once on first run, identified by `seed_id`
+  and `seed_version`. The seeder never modifies an existing collection. If the user deletes a built-in one, a tombstone
+  row stops the seeder re-adding it on restart; only "Restore examples" brings it back.
+- Deleting a collection removes its endpoints, their runs and insights in one transaction. Clearing history removes
+  runs and insights only. Both refuse while any affected run is active, and both confirm with counts first.
+- The per-endpoint report is **rule-generated**: numbers, trend table and the "how to read" key never come from the
+  model. Ollama adds interpretation sections only, grounded against the same numbers, with the rules analyzer producing
+  the same section shape as the fallback.
+- UI is terminal-styled: monospace, text controls, no new CSS framework, no icon set, no JS beyond htmx.
+Rejected: nested folders and moving endpoints between collections (out of scope, not needed for the seed); a local mock
+target service (extra moving part; `base_url` plus `httptest` covers tests); letting the model write the numbers or the
+key (cannot be trusted to quote them).
+Consequences:
+- New tables for collections and seed tombstones; `requests` gains a collection reference. No engine change beyond
+  `{{base_url}}` resolution at the URL-building point.
+- Runs and insights are keyed by test config and run ID with no foreign keys, so cascades are explicit SQL in one transaction.
+- The seed targets a third-party service run by someone else: modest configs, documented in `docs/collections.md`.
+- JSONPlaceholder has no auth, so the seed cannot demonstrate auth-probe or credential pools.
+Revisit if: users need to move endpoints between collections, share or export collections, or want an authenticated demo target.

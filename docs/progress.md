@@ -32,13 +32,44 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. (`b023f67`, `834c52a`, `ad970a0`)
 - [x] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
   fallback, not in the binary or image. FR-META-01..04. (`f7f8694`..`b0b87cb`)
+- [ ] C1. Collections: schema, migration, create/rename/base URL, delete collection, clear history — FR-COLL-02..06 (D-017)
+- [ ] C2. JSONPlaceholder seed, seeder with tombstone, Restore examples, `docs/collections.md` — FR-SEED-01..05
+- [ ] C3. Grouped sidebar, collection page, import into a collection, run all — FR-COLL-01, 07, 08, FR-REP-03
+- [ ] C4. Per-endpoint report with trend table and the key — FR-REP-01, 02
+- [ ] C5. Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison — FR-INS-01..03
 
 ## Current step
-Roadmap complete: steps 4–14 are all done. No next step is planned.
-Requirements: none open
-Status: done (step 11 closed, `f7f8694`..`b0b87cb`)
+C1. Collections: schema, migration, create/rename/base URL, delete collection, clear history (D-017).
+Requirements: FR-COLL-02..06
+Status: planning (steps 4–14 done; C1..C5 added after step 11)
 
 ## Handoff notes
+- Planning done for C1..C5 (D-017, FR-COLL/SEED/REP/INS written; docs only, nothing built, nothing committed). Per-step notes
+  are in the pasted spec "Collections, the JSONPlaceholder seed, per-endpoint reports, richer insights"; `/next` should
+  plan C1 first. Spec-vs-code conflicts found:
+  1. **Roadmap position:** the spec says "after the CI and masking steps"; both (5, 6) are done and the roadmap was
+     complete, so C1..C5 sit at the end, after step 11. "Current step" is unchanged and still says roadmap complete; `/next` must pick C1.
+  2. **URLs are stored whole and used verbatim.** `requests.url_template` is a full URL; `execRequest`
+     (`internal/engine/dispatch.go:193`) uses `def.URLTemplate` as-is and `engine.Probe` goes through `execRequest`.
+     `{{base_url}}` needs a resolution step before `execRequest` (it has no collection access). `{name}` path
+     placeholders are a different syntax, already handled there. Also shown unresolved in `report.go:79`,
+     `query_filter.go:225` (history search haystack), `authoring.go`, `runs.go:41`; decide whether those show the template or the resolved URL.
+  3. **No collection concept anywhere.** `requests(id, name, method, url_template, payload)` has no collection column;
+     `Migrate` is `CREATE TABLE IF NOT EXISTS` plus `migrateMaskedFields`, with no versioned migrations, so adding a column
+     and the "My endpoints" backfill must be idempotent by hand (check `PRAGMA table_info`).
+  4. **No foreign keys.** `test_configs.request_id`, `runs.test_config_id` and `insights.run_id` are plain TEXT, so
+     "delete collection" cascades must be explicit DELETEs (endpoint -> configs -> runs -> insights) in one tx. A run's
+     endpoint is reached only through its test config. Credential pools are not per-endpoint and stay untouched.
+  5. **Active-run check lives in the web layer.** The registry (`internal/web/registry.go`) is keyed by run ID; the
+     store cannot know about active runs, so handlers must collect active run IDs for the scope and pass them in (or check first), as the spec says.
+  6. **Run has no endpoint or collection field**, so per-endpoint trend and "clear history for one endpoint" join through `test_configs`.
+     An endpoint may have several configs; FR-COLL-07 "saved test config" and FR-REP-01 "last 10 runs" need a rule for which config(s) (suggest: latest config; runs of all its configs).
+  7. **Sidebar** (`templates/sidebar.html`) is a flat `range .Endpoints` with `.Recent` dots, htmx buttons and inline
+     styles; no mobile breakpoint or focus style exists (see Watch out), which the terminal-style notes require for new views.
+  8. **Import** (`importer.ImportFromBytes/URL`) returns `[]RequestDefinition` only, with no spec title, so FR-COLL-08 needs the title returned too.
+  9. **Docs embed:** `docs/docs.go` has an explicit embed list and `order`; `collections.md` goes in both (FR-SEED-05) and the docs test list.
+  10. **Seed tests** need `{{base_url}}` (item 2) first, since `http://` hosts in `httptest` cannot be the seed's real base URL.
+- Previous handoff (step 11), still true:
 - Done (step 11, FR-META-01..04): `tools/meta` (`go run ./tools/meta`, README there): `Validate`, `RulesDraft`/`scopeForPath`,
   `TruncateDiff`, `OllamaGenerator`, read-only `RealGit`, `run`. Tests: `TestValidate_*`, `TestScopeForPath`, `TestRulesDraft_*`,
   `TestTruncateDiff_*`, `TestRun_*` (httptest Ollama, six fallback causes, empty diff calls no model, non-local URL refused),
