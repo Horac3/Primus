@@ -94,6 +94,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg, guard))
 	mux.HandleFunc("GET /collections", collectionsPanelHandler(db, tmpl))
 	mux.HandleFunc("POST /collections", createCollectionHandler(db, tmpl))
+	mux.HandleFunc("POST /collections/restore", restoreExamplesHandler(db, tmpl))
 	mux.HandleFunc("POST /collections/{id}", updateCollectionHandler(db, tmpl))
 	mux.HandleFunc("POST /collections/{id}/delete", deleteCollectionHandler(db, tmpl, reg, guard))
 	mux.HandleFunc("POST /history/clear", clearHistoryHandler(db, tmpl, reg, guard))

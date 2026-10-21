@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/Horac3/Primus/internal/model"
+	"github.com/Horac3/Primus/internal/seed"
 	"github.com/Horac3/Primus/internal/store"
 )
 
@@ -90,6 +91,24 @@ func updateCollectionHandler(db *sql.DB, tmpl *template.Template) http.HandlerFu
 		}
 		w.Header().Set("HX-Trigger", "collections-changed")
 		renderCollectionsPanel(w, db, tmpl, collectionsView{Message: "Saved."})
+	}
+}
+
+// restoreExamplesHandler brings back the built-in collection the user deleted. It only inserts new rows,
+// so it does not need the scope guard.
+func restoreExamplesHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		res, err := seed.Restore(db)
+		if err != nil {
+			respondCollectionsError(w, db, tmpl, err)
+			return
+		}
+		if res == store.SeedAlreadyPresent {
+			renderCollectionsPanel(w, db, tmpl, collectionsView{Message: "The examples are already present; nothing changed."})
+			return
+		}
+		w.Header().Set("HX-Trigger", "collections-changed")
+		renderCollectionsPanel(w, db, tmpl, collectionsView{Message: "JSONPlaceholder examples restored."})
 	}
 }
 

@@ -47,6 +47,11 @@
     </select>
   </label>
 
+  <label style="margin-bottom:.5rem">
+    <span>Notes</span>
+    <textarea name="notes" rows="2" placeholder="What this endpoint is for, or what to watch for">{{.Def.Notes}}</textarea>
+  </label>
+
   <details>
     <summary>JSON body (optional)</summary>
     <textarea name="body" rows="5" placeholder='{"key":"value"}'>{{.BodyStr}}</textarea>

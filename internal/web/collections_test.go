@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Horac3/Primus/internal/model"
+	"github.com/Horac3/Primus/internal/seed"
 	"github.com/Horac3/Primus/internal/store"
 	"github.com/Horac3/Primus/internal/web"
 )
@@ -571,5 +572,74 @@ func TestImportVersusDefaultCollectionDelete_LeavesNoOrphans(t *testing.T) {
 		if n != 0 {
 			t.Fatalf("iteration %d: %d endpoints in a missing collection", i, n)
 		}
+	}
+}
+
+func seededByWeb(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	if _, err := seed.Ensure(db); err != nil {
+		t.Fatal(err)
+	}
+	cols, _ := store.ListCollections(db)
+	for _, c := range cols {
+		if c.SeedID == "jsonplaceholder" {
+			return c.ID
+		}
+	}
+	t.Fatal("seeded collection missing")
+	return ""
+}
+
+func TestRestoreExamples_AfterDelete_BringsCollectionBack(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	id := seededByWeb(t, db)
+	if _, err := store.DeleteCollection(db, id); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := postForm(t, mux, "/collections/restore", url.Values{})
+
+	body := rr.Body.String()
+	if rr.Code != http.StatusOK || !strings.Contains(body, "restored") || !strings.Contains(body, "JSONPlaceholder") {
+		t.Fatalf("restore = %d: %s", rr.Code, body)
+	}
+	if got := rr.Header().Get("HX-Trigger"); !strings.Contains(got, "collections-changed") {
+		t.Errorf("HX-Trigger = %q, want collections-changed", got)
+	}
+	if _, err := store.GetCollection(db, id); err != nil {
+		t.Errorf("collection not back: %v", err)
+	}
+}
+
+func TestRestoreExamples_WhilePresent_ReportsAlreadyPresent(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	id := seededByWeb(t, db)
+
+	rr := postForm(t, mux, "/collections/restore", url.Values{})
+
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "already present") {
+		t.Fatalf("restore = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("HX-Trigger") != "" {
+		t.Errorf("nothing changed, but HX-Trigger = %q", rr.Header().Get("HX-Trigger"))
+	}
+	if _, err := store.GetCollection(db, id); err != nil {
+		t.Errorf("collection gone: %v", err)
+	}
+}
+
+func TestRestoreExamples_NameTaken_ShowsMessage(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	if _, err := store.CreateCollection(db, "JSONPlaceholder", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := postForm(t, mux, "/collections/restore", url.Values{})
+
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "already exists") {
+		t.Errorf("restore = %d: %s", rr.Code, rr.Body.String())
 	}
 }

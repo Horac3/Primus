@@ -54,4 +54,9 @@
     <input type="text" name="base_url" placeholder="Base URL (optional)" aria-label="New collection base URL" style="flex:2 1 14rem;min-width:0">
     <button type="submit">Create</button>
   </form>
+
+  <form hx-post="/collections/restore" hx-target="#collections-panel" hx-swap="innerHTML" style="margin-top:.5rem">
+    <button type="submit" class="secondary">Restore examples</button>
+    <span class="muted">Brings back the built-in JSONPlaceholder collection if you deleted it.</span>
+  </form>
 </div>

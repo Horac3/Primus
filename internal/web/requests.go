@@ -239,6 +239,7 @@ func requestDefFromForm(r *http.Request) (model.RequestDefinition, error) {
 		Name:        strings.TrimSpace(r.FormValue("request_name")),
 		Method:      strings.ToUpper(strings.TrimSpace(r.FormValue("method"))),
 		URLTemplate: strings.TrimSpace(r.FormValue("url")),
+		Notes:       strings.TrimSpace(r.FormValue("notes")),
 
 		CollectionID: strings.TrimSpace(r.FormValue("collection_id")),
 	}

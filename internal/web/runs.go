@@ -48,9 +48,16 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *s
 		unlock := sync.OnceFunc(guard.mu.Unlock)
 		defer unlock()
 		// A form that omits the collection must not move an existing endpoint to "My endpoints".
-		if def.CollectionID == "" && def.ID != "" {
+		// Likewise a form that omits notes must not wipe the endpoint's note.
+		_, postedNotes := r.PostForm["notes"]
+		if (def.CollectionID == "" || !postedNotes) && def.ID != "" {
 			if existing, err := store.GetRequestDefinition(db, def.ID); err == nil {
-				def.CollectionID = existing.CollectionID
+				if def.CollectionID == "" {
+					def.CollectionID = existing.CollectionID
+				}
+				if !postedNotes {
+					def.Notes = existing.Notes
+				}
 			}
 		}
 		if def.CollectionID != "" {
