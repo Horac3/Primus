@@ -25,6 +25,10 @@ primus run <config.json> [--db <path>]
   empty keeps the rule above. `pool` without `credential_pool_id` exits `2`.
   For `auth_probe` runs, `max_rate` caps attempts per second. See
   [auth-probe](auth-probe.md).
+- `"mode": "rate"` with `target_rate` and `duration` runs open-loop at a
+  fixed requests/sec (see [load](load.md)). The summary adds `target_rate`,
+  `achieved_rate` and `dropped`; any drop exits `1` with outcome
+  `fail_rate_not_sustained`.
 
 ## Exit codes
 

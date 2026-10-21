@@ -39,8 +39,9 @@ All checks go through `.claude/kit/check.sh` (configured in `.claude/kit/command
 2. **One engine loop.** `engine.Run*` serves load, burst and soak. Stop condition is `TotalRequests` XOR `Duration`.
    Runs are async through the run registry with 1s polling; Stop cancels the run's context. Work started from an
    HTTP handler must use `context.WithoutCancel`, because the request context dies when the handler returns.
-3. **Closed-loop load.** Concurrency is not requests/sec: throughput = concurrency / latency. There is no
-   open-loop "fixed req/s" mode yet. Never describe concurrency as a rate.
+3. **Closed-loop load.** Concurrency is not requests/sec: throughput = concurrency / latency. The only open-loop
+   path is `mode: rate` (D-012): `target_rate` is the rate and concurrency is the in-flight cap. Never describe
+   concurrency as a rate.
 4. **Auth.** One singleton `global_auth` row, applied at dispatch by `applyAuth`; a header set to `[GLOBAL]` uses it.
    An active credential pool overrides global auth for the run through the same `applyAuth` path. No parallel path.
 5. **Verdict is tri-state:** PASS, FAILED, "completed — no assertions configured". A run with zero completed

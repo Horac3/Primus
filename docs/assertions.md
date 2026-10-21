@@ -42,7 +42,7 @@ is counted as cancelled (`interrupted by stop`), not as a failed login.
 | State | Banner | Meaning |
 |---|---|---|
 | PASS | green `✓ PASSED` | Every configured assertion held. |
-| FAILED | red `✗ FAILED` | At least one assertion failed — or no request completed (`✗ FAILED — no requests completed`), which fails unconditionally. |
+| FAILED | red `✗ FAILED` | At least one assertion failed — or no request completed (`✗ FAILED — no requests completed`), which fails unconditionally. A [fixed-rate](load.md) run that dropped any request also fails unconditionally (`✗ FAILED — target rate not sustained`). |
 | No assertions | neutral `◎ Completed — no assertions configured` | Requests went through, but nothing was asserted. |
 
 "No requests completed" means no HTTP response came back at all: every

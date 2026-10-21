@@ -116,16 +116,16 @@ Context: Step 9 adds a fixed req/s mode (FR-RATE-01..04). Closed-loop load hides
 concurrency/latency and latency excludes the queueing the user would have seen (coordinated omission). D-011 keeps
 `max_rate` an auth-probe ceiling, so the target needs its own field.
 Decision: `mode: rate` with `TestConfig.TargetRate` (`target_rate`, req/s). It needs `duration` and
-`target_rate > 0`; `target_rate` is rejected in other modes and with `max_rate` or `burst_pattern`. In rate mode
+`target_rate >= 0.01` (smaller overflows the due-time arithmetic); `target_rate` is rejected in other modes and with `max_rate` or `burst_pattern`. In rate mode
 `concurrency` is the maximum number of requests in flight, never a rate. A scheduler replaces `feed` for this mode:
 the n-th request is due at `start + n/target_rate` (anchored to the start, so it never drifts). At each due time it
-takes one of `concurrency` in-flight slots without blocking (a semaphore that a worker frees once that request's
+takes one in-flight slot without blocking (one slot per worker left after pool logins, so `concurrency` at most; a semaphore that a worker frees once that request's
 result is delivered) and queues the intended send time for the workers; with every slot busy the request is counted
 as `Dropped`. A slot, not "is a worker blocked on receive right now", is the cap: the latter depends on goroutine
 scheduling and dropped the very first request in testing. A late wake-up attempts every overdue slot at once, so nothing
 is skipped silently. Workers stay the existing `runWorkers` (pools, re-login, payload pools), and a job carries its
 intended send time; latency is measured from it. The summary adds `dropped`, `target_rate` and `achieved_rate`
-(released requests per measured second). Any drop gives a new outcome, `fail_rate_not_sustained`, checked after
+(released requests over the duration, or the time until Stop). Any drop gives a new outcome, `fail_rate_not_sustained`, checked after
 `fail_no_requests` and before the no-assertions rule; the CLI exits 1 on it.
 Rejected: a goroutine per request behind a semaphore (a second worker path that pools and re-login would have to
 follow); an unbounded queue in front of the workers (it hides drops as queueing); a `max_drop_rate` assertion (drops
