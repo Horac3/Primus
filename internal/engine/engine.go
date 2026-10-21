@@ -190,31 +190,53 @@ func RunWithPool(ctx context.Context, req model.RequestDefinition, cfg model.Tes
 		defer cancel()
 	}
 
-	buf := cfg.Concurrency
-	if cfg.MaxRate > 0 {
-		// Unbuffered: a release is the moment a worker takes the job, so
-		// MaxRate bounds dispatch, not just queueing.
-		buf = 0
-	}
-	if cfg.BurstPattern != nil && cfg.BurstPattern.Count > buf {
-		buf = cfg.BurstPattern.Count
-	}
-	jobs := make(chan struct{}, buf)
 	results := make(chan result, cfg.Concurrency)
-
 	startedAt := time.Now()
 	feedDone := make(chan struct{})
-	go func() {
-		defer close(feedDone)
-		feed(runCtx, jobs, cfg, startedAt)
-	}()
-	runWorkers(runCtx, req, workers, cfg.PayloadPool, jobs, results, client)
+	// Written by the rate scheduler goroutine, read after feedDone closes.
+	var dropped int
+	var scheduled time.Duration
+	if cfg.Mode == model.ModeRate {
+		// Concurrency caps the requests in flight: each holds a slot from
+		// release until its result is delivered.
+		slots := make(chan struct{}, cfg.Concurrency)
+		jobs := make(chan time.Time, cfg.Concurrency)
+		go func() {
+			defer close(feedDone)
+			dropped = schedule(runCtx, jobs, slots, cfg.TargetRate, startedAt, startedAt.Add(cfg.Duration))
+			scheduled = time.Since(startedAt)
+		}()
+		runScheduledWorkers(runCtx, req, workers, cfg.PayloadPool, jobs, slots, results, client)
+	} else {
+		buf := cfg.Concurrency
+		if cfg.MaxRate > 0 {
+			// Unbuffered: a release is the moment a worker takes the job, so
+			// MaxRate bounds dispatch, not just queueing.
+			buf = 0
+		}
+		if cfg.BurstPattern != nil && cfg.BurstPattern.Count > buf {
+			buf = cfg.BurstPattern.Count
+		}
+		jobs := make(chan struct{}, buf)
+		go func() {
+			defer close(feedDone)
+			feed(runCtx, jobs, cfg, startedAt)
+		}()
+		runWorkers(runCtx, req, workers, cfg.PayloadPool, jobs, results, client)
+	}
 
 	summary, buckets, series := aggregate(results, cfg.Assertions, startedAt, snapshot)
 	finishedAt := time.Now()
 	// Workers exit on cancel without draining jobs, so feed may still be
 	// in a send or burst-idle select; it returns on runCtx.Done.
 	<-feedDone
+	if cfg.Mode == model.ModeRate {
+		summary.Dropped = dropped
+		summary.TargetRate = cfg.TargetRate
+		if secs := scheduled.Seconds(); secs > 0 {
+			summary.AchievedRate = float64(summary.TotalRequests+summary.Cancelled) / secs
+		}
+	}
 	run := buildRun(cfg, summary, CheckAssertions(cfg.Assertions, summary), buckets, startedAt, finishedAt, series)
 	// Stopped: the caller cancelled before the run's own stop condition. A
 	// count run that already fired every request finished, even if a Stop

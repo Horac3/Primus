@@ -101,13 +101,57 @@ func runWorkers(
 	results chan<- result,
 	client *http.Client,
 ) {
+	startWorkers(ctx, req, workers, payloadPool, func() (time.Time, bool) {
+		_, ok := <-jobs
+		return time.Time{}, ok
+	}, func() {}, results, client)
+}
+
+// runScheduledWorkers is runWorkers for rate mode: each job is the
+// request's intended send time, and its latency is measured from it. A
+// worker frees one of the scheduler's in-flight slots once it has
+// delivered that request's result.
+func runScheduledWorkers(
+	ctx context.Context,
+	req model.RequestDefinition,
+	workers []workerAuth,
+	payloadPool []json.RawMessage,
+	jobs <-chan time.Time,
+	slots <-chan struct{},
+	results chan<- result,
+	client *http.Client,
+) {
+	startWorkers(ctx, req, workers, payloadPool, func() (time.Time, bool) {
+		due, ok := <-jobs
+		return due, ok
+	}, func() { <-slots }, results, client)
+}
+
+// startWorkers runs the worker loop shared by both job kinds. next blocks
+// for the next job and returns its intended send time (zero when the job
+// has none) and false once the jobs channel is closed; done runs after
+// each fired request's result is delivered.
+func startWorkers(
+	ctx context.Context,
+	req model.RequestDefinition,
+	workers []workerAuth,
+	payloadPool []json.RawMessage,
+	next func() (time.Time, bool),
+	done func(),
+	results chan<- result,
+	client *http.Client,
+) {
 	var wg sync.WaitGroup
 	var nextPayload atomic.Uint64
 	for _, w := range workers {
 		wg.Add(1)
 		go func(w workerAuth) {
 			defer wg.Done()
-			for range jobs {
+			for {
+				due, ok := next()
+				if !ok {
+					return
+				}
 				if ctx.Err() != nil {
 					return
 				}
@@ -117,6 +161,9 @@ func runWorkers(
 					request.Body = &model.BodyTemplate{Raw: append([]byte(nil), payloadPool[index]...)}
 				}
 				r := execRequest(ctx, client, request, w.auth)
+				if !due.IsZero() {
+					r.latency = time.Since(due)
+				}
 				// Judge by the run context, not the error type: a request's
 				// own timeout also surfaces as a context error, and that one
 				// is the target's fault.
@@ -124,6 +171,7 @@ func runWorkers(
 				// Always deliver: aggregate drains results until close, so
 				// every dispatched request is counted exactly once.
 				results <- r
+				done()
 				if r.statusCode == http.StatusUnauthorized && w.relogin != nil {
 					relogin := w.relogin
 					w.relogin = nil // re-login once per worker

@@ -119,14 +119,16 @@ Decision: `mode: rate` with `TestConfig.TargetRate` (`target_rate`, req/s). It n
 `target_rate > 0`; `target_rate` is rejected in other modes and with `max_rate` or `burst_pattern`. In rate mode
 `concurrency` is the maximum number of requests in flight, never a rate. A scheduler replaces `feed` for this mode:
 the n-th request is due at `start + n/target_rate` (anchored to the start, so it never drifts). At each due time it
-makes a non-blocking send of the intended time on the unbuffered jobs channel, which succeeds only when a worker is
-idle; otherwise the request is counted as `Dropped`. A late wake-up attempts every overdue slot at once, so nothing
+takes one of `concurrency` in-flight slots without blocking (a semaphore that a worker frees once that request's
+result is delivered) and queues the intended send time for the workers; with every slot busy the request is counted
+as `Dropped`. A slot, not "is a worker blocked on receive right now", is the cap: the latter depends on goroutine
+scheduling and dropped the very first request in testing. A late wake-up attempts every overdue slot at once, so nothing
 is skipped silently. Workers stay the existing `runWorkers` (pools, re-login, payload pools), and a job carries its
 intended send time; latency is measured from it. The summary adds `dropped`, `target_rate` and `achieved_rate`
 (released requests per measured second). Any drop gives a new outcome, `fail_rate_not_sustained`, checked after
 `fail_no_requests` and before the no-assertions rule; the CLI exits 1 on it.
 Rejected: a goroutine per request behind a semaphore (a second worker path that pools and re-login would have to
-follow); a buffered queue in front of the workers (it hides drops as queueing); a `max_drop_rate` assertion (drops
+follow); an unbounded queue in front of the workers (it hides drops as queueing); a `max_drop_rate` assertion (drops
 would pass silently when no assertions are set).
 Consequences: rule 3 in CLAUDE.md changes: open-loop exists, but only in rate mode. The start-anchored catch-up that
 D-011 rejected for `max_rate` is intended here: an open-loop target must try to hold its schedule.

@@ -39,6 +39,28 @@ func ValidateTestConfig(cfg model.TestConfig) error {
 	if cfg.MaxRate > 0 && cfg.BurstPattern != nil {
 		return fmt.Errorf("max_rate cannot be combined with a burst_pattern")
 	}
+	return validateTargetRate(cfg)
+}
+
+// validateTargetRate checks the rate-mode fields: a finite TargetRate > 0
+// and a Duration, never alongside a burst_pattern. TargetRate is rejected
+// in every other mode.
+func validateTargetRate(cfg model.TestConfig) error {
+	if cfg.Mode != model.ModeRate {
+		if cfg.TargetRate != 0 {
+			return fmt.Errorf("target_rate applies to rate mode only (mode %s)", cfg.Mode)
+		}
+		return nil
+	}
+	if !(cfg.TargetRate > 0) || math.IsInf(cfg.TargetRate, 0) {
+		return fmt.Errorf("target_rate must be a finite number > 0 (got %g)", cfg.TargetRate)
+	}
+	if cfg.Duration <= 0 {
+		return fmt.Errorf("rate mode needs a duration, not total_requests")
+	}
+	if cfg.BurstPattern != nil {
+		return fmt.Errorf("target_rate cannot be combined with a burst_pattern")
+	}
 	return nil
 }
 
@@ -139,6 +161,11 @@ func DetermineOutcome(a model.Assertions, s model.RunSummary) model.RunOutcome {
 	// Baseline: no completed request overrides everything.
 	if noRequestsCompleted(s) {
 		return model.OutcomeFailNoRequests
+	}
+	// A rate run that could not release every due request did not hold its
+	// target, whatever the assertions say.
+	if s.Dropped > 0 {
+		return model.OutcomeFailRateNotSustained
 	}
 	// No assertions configured and at least one success → neutral.
 	hasAssertions := a.MaxErrorRate > 0 || a.MaxP95Millis > 0 || len(a.ExpectedStatus) > 0
