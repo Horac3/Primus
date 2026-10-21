@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	primusdocs "github.com/Horac3/Primus/docs"
 	"github.com/Horac3/Primus/internal/author"
@@ -323,7 +324,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("GET /runs/{id}/status", runStatusHandler(db, tmpl, reg, analyzer))
 	mux.HandleFunc("POST /runs/{id}/stop", runStopHandler(db, tmpl, reg, analyzer))
 	mux.HandleFunc("GET /runs/{id}", getRunHandler(db, tmpl))
-	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl))
+	mux.HandleFunc("GET /history-fragment", historyFragmentHandler(db, tmpl, configuredQueryInterpreter()))
 	mux.HandleFunc("GET /docs", docsIndexHandler(tmpl))
 	mux.HandleFunc("GET /docs/{slug}", docsPageHandler(tmpl))
 
@@ -348,6 +349,17 @@ func configuredAuthorGenerator(bounds author.Bounds) author.Generator {
 		return nil
 	}
 	return generator
+}
+
+// configuredQueryInterpreter returns the model that reads history questions, or
+// nil when the rules interpreter answers alone.
+func configuredQueryInterpreter() insight.QueryInterpreter {
+	config, err := insight.LoadConfig()
+	if err != nil {
+		log.Printf("web: load history query config: %v; using rules", err)
+		return nil
+	}
+	return insight.NewQueryInterpreter(config)
 }
 
 func configuredInsightAnalyzer() insight.Analyzer {
@@ -1022,14 +1034,46 @@ func analyzerModelName(analyzer insight.Analyzer) string {
 
 // ---- GET /history-fragment -------------------------------------------------
 
-func historyFragmentHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+// historyView is the history fragment's data. Query is empty for the plain list.
+type historyView struct {
+	Runs   []model.Run
+	Query  string
+	Result insight.QueryResult
+}
+
+func historyFragmentHandler(db *sql.DB, tmpl *template.Template, interpreter insight.QueryInterpreter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		question := strings.TrimSpace(r.URL.Query().Get("q"))
+		if utf8.RuneCountInString(question) > insight.MaxQuestionLength {
+			http.Error(w, fmt.Sprintf("question is longer than %d characters", insight.MaxQuestionLength), http.StatusBadRequest)
+			return
+		}
 		runs, err := store.ListAllRuns(db)
 		if err != nil {
 			http.Error(w, "list runs: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		renderTemplate(w, tmpl, "history-fragment.html", runs)
+		if question == "" {
+			renderTemplate(w, tmpl, "history-fragment.html", historyView{Runs: runs})
+			return
+		}
+		configs, err := store.ListTestConfigs(db)
+		if err != nil {
+			http.Error(w, "list test configs: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		requests, err := store.ListRequestDefinitions(db)
+		if err != nil {
+			http.Error(w, "list requests: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		now := time.Now()
+		result := insight.InterpretQuery(r.Context(), interpreter, insight.DefaultQueryTimeout, question, now)
+		renderTemplate(w, tmpl, "history-fragment.html", historyView{
+			Runs:   result.Filter.Apply(runs, configs, requests, now),
+			Query:  question,
+			Result: result,
+		})
 	}
 }
 

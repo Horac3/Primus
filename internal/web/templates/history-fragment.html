@@ -1,11 +1,18 @@
-{{- /* history-fragment.html — htmx fragment returned by GET /history-fragment */ -}}
-{{if .}}
+{{- /* history-fragment.html — htmx fragment returned by GET /history-fragment[?q=question] */ -}}
+{{if .Query}}
+<p class="muted" style="font-size:.82rem;margin:.25rem 0 .5rem">
+  Interpreted as: <strong>{{.Result.Filter.Describe}}</strong>
+  · by {{.Result.Interpreter}}{{if .Result.FellBack}} (ollama unavailable){{end}}
+  {{if not .Result.Understood}}<br>Question not understood, so every run is listed. Try words like "failed burst runs", "last 7 days" or "p95 over 500ms".{{end}}
+</p>
+{{end}}
+{{if .Runs}}
 <table>
   <thead>
     <tr><th>ID</th><th>Config</th><th>Started</th><th>P95 ms</th><th>Result</th></tr>
   </thead>
   <tbody>
-  {{range .}}
+  {{range .Runs}}
   <tr>
     <td><a href="/runs/{{.ID}}" style="color:#3b82d4;font-size:.85rem">{{.ID}}</a></td>
     <td style="color:#57606a;font-size:.82rem">{{.TestConfigID}}</td>
@@ -16,6 +23,8 @@
   {{end}}
   </tbody>
 </table>
+{{else if .Query}}
+<p style="color:#57606a;font-size:.82rem">No runs match.</p>
 {{else}}
 <p style="color:#57606a;font-size:.88rem">No runs yet.</p>
 {{end}}

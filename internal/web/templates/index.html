@@ -83,6 +83,14 @@ details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 
   </div>
 
   <h2>History</h2>
+  <form hx-get="/history-fragment" hx-target="#history" hx-swap="innerHTML" hx-indicator="#history-query-busy"
+        style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
+    <label for="history-query" class="muted" style="align-self:center">Ask
+      <span id="history-query-busy" class="htmx-indicator">· searching…</span></label>
+    <input id="history-query" type="text" name="q" maxlength="500"
+           placeholder="e.g. failed burst runs last week" style="flex:1 1 12rem;min-width:0">
+    <button type="submit">Search</button>
+  </form>
   <div id="history" hx-get="/history-fragment" hx-trigger="load" hx-swap="innerHTML">
     <span class="muted">loading history…</span>
   </div>
