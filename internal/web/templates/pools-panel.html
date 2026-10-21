@@ -5,10 +5,37 @@
     <button type="button" class="secondary" onclick="document.getElementById('pool-panel').innerHTML=''">Close</button>
   </div>
   <p class="muted">Each worker logs in once as its own account before measurement starts, then sends its own token.
-    The accounts must already exist on the target: Primus never creates them.
-    <a href="/docs/credential-pools" style="color:#3b82d4">How pools work</a></p>
+    The accounts must exist on the target before a run: import existing ones, or create new ones with
+    "Provision accounts" below. <a href="/docs/credential-pools" style="color:#3b82d4">How pools work</a></p>
 
   {{with .Message}}<p class="verdict-pass">{{.}}</p>{{end}}
+
+  {{with .Provision}}
+  {{if .Running}}
+  <div class="card" data-testid="provision-running" hx-get="/pools/provision/{{.JobID}}/status?pool={{.PoolID}}"
+       hx-trigger="every 1s" hx-target="#pool-panel" hx-swap="innerHTML">
+    <span class="muted">Provisioning accounts on the target…</span>
+    <button type="button" class="secondary" hx-post="/pools/provision/{{.JobID}}/stop?pool={{.PoolID}}"
+            hx-target="#pool-panel" hx-swap="innerHTML">Stop</button>
+  </div>
+  {{else}}{{with .Result}}
+  <div class="card" data-testid="provision-result">
+    {{with .Summary}}
+    <p><strong>Created {{.Succeeded}} of {{.Attempted}} accounts</strong>
+      <span class="muted">· {{.Failed}} failed · {{.Cancelled}} cancelled</span></p>
+    {{if .FailureReasons}}
+    <table>
+      <thead><tr><th>Reason</th><th>Count</th></tr></thead>
+      <tbody>{{range .FailureReasons}}<tr><td>{{.Cause}}</td><td>{{.Count}}</td></tr>{{end}}</tbody>
+    </table>
+    {{end}}
+    {{end}}
+    {{if .Stored}}<p class="verdict-pass">{{.Stored}} account(s) saved to {{.PoolName}}.
+      {{if .NewPool}}Set its login URL under "Login step" before using it for runs.{{end}}</p>{{end}}
+    {{with .SaveErr}}<p class="verdict-fail">{{.}}</p>{{end}}
+  </div>
+  {{end}}{{end}}
+  {{end}}
 
   {{with .Import}}
   <div style="margin:.5rem 0">
@@ -49,6 +76,44 @@
         <textarea name="content" rows="4" placeholder="username,password&#10;alice,s3cret"></textarea></label>
       <p class="muted">Up to 10,000 rows. Fields are free-form: username, password, email, client_id, client_secret, …</p>
       <button type="submit">Import</button>
+    </form>
+  </details>
+
+  <details>
+    <summary>Provision accounts (sign up new ones on the target)</summary>
+    <form hx-post="/pools/provision" hx-target="#pool-panel" hx-swap="innerHTML">
+      <p class="muted">Sends one sign-up request per account, then saves the ones that succeed (HTTP 2xx) into a pool.
+        Accounts stay on the target: Primus cannot delete them, verify emails or solve captchas.
+        Only run this against a system you may create test accounts on.</p>
+      <div class="row">
+        <label><span>Add to pool</span>
+          <select name="existing_pool_id">
+            <option value="">New pool…</option>
+            {{range .Pools}}<option value="{{.ID}}" {{if and $.Selected (eq .ID $.Selected.ID)}}selected{{end}}>{{.Name}} ({{.Count}})</option>{{end}}
+          </select></label>
+        <label><span>New pool name</span><input type="text" name="name" placeholder="fresh users"></label>
+        <label style="flex:0 0 110px"><span>Accounts</span><input type="number" min="1" name="count" value="10" required></label>
+        <label style="flex:0 0 140px"><span>Concurrency</span><input type="number" min="1" name="concurrency" value="5"></label>
+      </div>
+      <label><span>Account fields, one per line (generated: {{"{{seq}}"}} 1, 2, 3… and {{"{{secret}}"}} a random password)</span>
+        <textarea name="fields" rows="3">{{"email=user{{seq}}@example.test"}}
+{{"password={{secret}}"}}</textarea></label>
+      <div class="row">
+        <label style="flex:0 0 100px"><span>Method</span><input type="text" name="signup_method" value="POST"></label>
+        <label><span>Sign-up URL</span><input type="url" name="signup_url" placeholder="https://api.example.com/auth/register" required></label>
+      </div>
+      <label><span>Headers (JSON object)</span><input type="text" name="signup_headers" value='{"Content-Type":"application/json"}'></label>
+      <label><span>Body (use the field names as {{"{{field}}"}} placeholders)</span>
+        <textarea name="signup_body" rows="3">{{"{"}}"email":"{{"{{email}}"}}","password":"{{"{{password}}"}}"{{"}"}}</textarea></label>
+      <strong>Keep a value from the response</strong> <span class="muted">— optional, e.g. the new user's id</span>
+      <div class="row">
+        <label><span>Save as field</span><input type="text" name="extract_field" placeholder="user_id"></label>
+        <label style="flex:0 0 120px"><span>From</span>
+          <select name="extract_from"><option value="body">JSON body</option><option value="header">Header</option></select></label>
+        <label><span>Path (data.id) or header name</span><input type="text" name="extract_path"></label>
+        <label style="flex:0 0 140px"><span>Strip prefix</span><input type="text" name="extract_prefix"></label>
+      </div>
+      <button type="submit">Provision accounts</button>
     </form>
   </details>
 

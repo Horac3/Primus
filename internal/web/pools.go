@@ -73,6 +73,7 @@ type poolPanelData struct {
 	HeadersJSON string
 	Import      *importReport
 	Message     string
+	Provision   *provisionView
 }
 
 // renderPoolPanel renders the pool manager with selectedID (falling back
