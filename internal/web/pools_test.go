@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -29,9 +30,10 @@ const (
 // loginTarget is a target with alice and bob: POST /login (JSON) returns
 // {"data":{"token":"tok-<user>-secret"}}; GET /me needs that bearer token.
 type loginTarget struct {
-	srv  *httptest.Server
-	mu   sync.Mutex
-	seen map[string]int // Authorization header -> hits
+	srv       *httptest.Server
+	mu        sync.Mutex
+	seen      map[string]int // Authorization header -> hits
+	nicknames []string       // nickname fields received by POST /login
 }
 
 func newLoginTarget(t *testing.T) *loginTarget {
@@ -40,10 +42,15 @@ func newLoginTarget(t *testing.T) *loginTarget {
 	passwords := map[string]string{"alice": alicePassword, "bob": bobPassword}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /login", func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Username, Password string }
+		var in struct{ Username, Password, Nickname string }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || passwords[in.Username] != in.Password || in.Password == "" {
 			http.Error(w, "nope", http.StatusUnauthorized)
 			return
+		}
+		if in.Nickname != "" {
+			lt.mu.Lock()
+			lt.nicknames = append(lt.nicknames, in.Nickname)
+			lt.mu.Unlock()
 		}
 		fmt.Fprintf(w, `{"data":{"token":"tok-%s-secret"}}`, in.Username)
 	})
@@ -131,6 +138,24 @@ func poolCSV() string {
 
 // ---- import + masked view ---------------------------------------------------
 
+func TestPoolImport_StoresDefaultMaskedFields(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	// Act
+	id := importPool(t, db, mux, "username,apiKey,shipping\nalice,k1,s1\n")
+
+	// Assert
+	pool, err := store.GetCredentialPoolWithSecrets(db, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(pool.MaskedFields, ","); got != "apiKey" {
+		t.Errorf("MaskedFields = %q, want apiKey", got)
+	}
+}
+
 func TestPoolImport_ReportsRowsAndMasksPasswords(t *testing.T) {
 	// Arrange
 	db := newTestDB(t)
@@ -204,6 +229,61 @@ func TestPoolsFragment_ShowsMaskedPool(t *testing.T) {
 	}
 	if strings.Contains(body, alicePassword) || strings.Contains(body, bobPassword) {
 		t.Errorf("pool panel leaks a password:\n%s", body)
+	}
+}
+
+func TestPoolMasking_TogglesFieldsAfterSave(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	id := importPool(t, db, mux, "username,nickname,password\nalice,ally-N1,"+alicePassword+"\n")
+	before := getPath(t, mux, "/pools-fragment?id="+id).Body.String()
+	if !strings.Contains(before, "ally-N1") || strings.Contains(before, alicePassword) {
+		t.Fatalf("before toggling, want nickname shown and password masked:\n%s", before)
+	}
+
+	// Act: mask nickname, unmask password, and send a name the pool lacks.
+	rr := postForm(t, mux, "/pools/"+id+"/masking", url.Values{"mask": {"nickname", "no_such_field"}})
+
+	// Assert
+	body := rr.Body.String()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST masking = %d: %s", rr.Code, body)
+	}
+	if strings.Contains(body, "ally-N1") {
+		t.Errorf("masked nickname still shown:\n%s", body)
+	}
+	if !strings.Contains(body, alicePassword) {
+		t.Errorf("unmasked password not shown after save:\n%s", body)
+	}
+	pool, err := store.GetCredentialPoolWithSecrets(db, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(pool.MaskedFields, ","); got != "nickname" {
+		t.Errorf("stored MaskedFields = %q, want nickname only", got)
+	}
+}
+
+func TestPoolMasking_UntickAllStoresEmptyList(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	id := importPool(t, db, mux, poolCSV())
+
+	// Act
+	rr := postForm(t, mux, "/pools/"+id+"/masking", url.Values{})
+
+	// Assert
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), alicePassword) {
+		t.Fatalf("POST masking = %d, want the password shown:\n%s", rr.Code, rr.Body.String())
+	}
+	pool, err := store.GetCredentialPoolWithSecrets(db, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pool.MaskedFields == nil || len(pool.MaskedFields) != 0 {
+		t.Errorf("MaskedFields = %#v, want a stored empty list", pool.MaskedFields)
 	}
 }
 
@@ -414,5 +494,63 @@ func TestPoolSecrets_NeverInLogsExportsOrAnalyzerInput(t *testing.T) {
 	}
 	if summary.Logins == nil || summary.Logins.Failed != 1 {
 		t.Errorf("analyzer summary logins = %+v, want counts with 1 failure", summary.Logins)
+	}
+}
+
+func TestPoolSecrets_FlaggedOrdinaryFieldNeverLeaks(t *testing.T) {
+	// Arrange: nickname has an ordinary name, is flagged by hand, and is sent
+	// in the login body, so the engine's dispatch read must still see it.
+	const nickname = "nick-SENTINEL-1"
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	lt := newLoginTarget(t)
+	csv := "username,password,nickname\nalice," + alicePassword + "," + nickname + "\nbob," + bobPassword + ",nick-bob\n"
+	id := importPool(t, db, mux, csv)
+	configurePool(t, mux, id, lt, url.Values{
+		"login_body": {`{"username":"{{username}}","password":"{{password}}","nickname":"{{nickname}}"}`},
+	})
+	if rr := postForm(t, mux, "/pools/"+id+"/masking", url.Values{"mask": {"password", "nickname"}}); rr.Code != http.StatusOK {
+		t.Fatalf("POST masking = %d: %s", rr.Code, rr.Body.String())
+	}
+	postForm(t, mux, "/pools/active", url.Values{"pool_id": {id}})
+
+	// Act
+	runID := postRuns(t, mux, runForm(lt, "2"))
+	page := pollDone(t, mux, runID)
+	run, err := store.GetRun(db, runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	export, _ := json.Marshal(run)
+	summary := insight.BuildSummary(run)
+	analyzerInput, _ := json.Marshal(struct {
+		Summary  insight.Summary   `json:"summary"`
+		Findings []insight.Finding `json:"findings"`
+	}{summary, insight.Evaluate(summary)})
+	panel := getPath(t, mux, "/pools-fragment?id="+id).Body.String()
+
+	// Assert
+	if summary.Logins == nil || summary.Logins.Failed != 0 {
+		t.Fatalf("analyzer summary logins = %+v, want every login to succeed", summary.Logins)
+	}
+	lt.mu.Lock()
+	sent := slices.Contains(lt.nicknames, nickname)
+	lt.mu.Unlock()
+	if !sent {
+		t.Errorf("target never received the real nickname; the dispatch read must not mask it")
+	}
+	secrets := []string{nickname, alicePassword, "tok-alice-secret"}
+	for name, captured := range map[string]string{
+		"server log": logs.String(), "run export": string(export),
+		"analyzer input": string(analyzerInput), "result page": page, "pool panel": panel,
+	} {
+		for _, secret := range secrets {
+			if strings.Contains(captured, secret) {
+				t.Errorf("%s contains secret %q", name, secret)
+			}
+		}
 	}
 }

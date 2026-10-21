@@ -64,6 +64,18 @@
   </table>
   {{if gt (len .Credentials) (len $.Preview)}}<p class="muted">Showing the first {{len $.Preview}}.</p>{{end}}
 
+  <form hx-post="/pools/{{.ID}}/masking" hx-target="#pool-panel" hx-swap="innerHTML" style="margin-top:.75rem">
+    <fieldset>
+      <legend><strong>Masked fields</strong> <span class="muted">— hidden everywhere except the login request itself</span></legend>
+      <div class="row">
+        {{range $.Fields}}
+        <label style="flex:0 0 auto"><input type="checkbox" name="mask" value="{{.}}" {{if index $.Masked .}}checked{{end}}> Mask this value: <code>{{.}}</code></label>
+        {{end}}
+      </div>
+    </fieldset>
+    <button type="submit" class="secondary">Save masked fields</button>
+  </form>
+
   <form hx-post="/pools/{{.ID}}/spec" hx-target="#pool-panel" hx-swap="innerHTML" style="margin-top:.75rem">
     <strong>Login step</strong> <span class="muted">— use {{"{{field}}"}} placeholders from the columns above</span>
     <div class="row">

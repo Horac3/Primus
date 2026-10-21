@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +69,7 @@ type poolPanelData struct {
 	Selected    *model.CredentialPool // masked
 	Preview     []model.Credential    // masked, at most poolPreviewRows
 	Fields      []string
+	Masked      map[string]bool // fields the pool masks, for the checkboxes
 	HeadersJSON string
 	Import      *importReport
 	Message     string
@@ -102,6 +104,11 @@ func renderPoolPanel(w http.ResponseWriter, db *sql.DB, tmpl *template.Template,
 				data.Preview = data.Preview[:poolPreviewRows]
 			}
 			data.Fields = credentialFields(pool.Credentials)
+			masked := store.EffectiveMaskedFields(pool)
+			data.Masked = make(map[string]bool, len(masked))
+			for _, f := range masked {
+				data.Masked[f] = true
+			}
 			headers, _ := json.Marshal(pool.Login.Headers)
 			data.HeadersJSON = string(headers)
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -226,10 +233,15 @@ func defaultPool(id, name string, creds []model.Credential) model.CredentialPool
 		body[f] = "{{" + f + "}}"
 	}
 	raw, _ := json.Marshal(body)
+	masked := credential.DefaultMaskedFields(fields)
+	if masked == nil {
+		masked = []string{}
+	}
 	return model.CredentialPool{
-		ID:          id,
-		Name:        name,
-		Credentials: creds,
+		ID:           id,
+		Name:         name,
+		Credentials:  creds,
+		MaskedFields: masked,
 		Login: model.LoginSpec{
 			Method:     http.MethodPost,
 			Headers:    map[string]string{"Content-Type": "application/json"},
@@ -265,6 +277,38 @@ func poolSpecHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			return
 		}
 		renderPoolPanel(w, db, tmpl, id, poolPanelData{Message: "Login settings saved."})
+	}
+}
+
+// ---- POST /pools/{id}/masking ------------------------------------------------
+
+// poolMaskingHandler stores which fields the pool masks: the ticked "mask"
+// boxes that name a field of the pool. Unknown names are ignored.
+func poolMaskingHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		pool, err := store.GetCredentialPoolWithSecrets(db, id)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid masking form", http.StatusBadRequest)
+			return
+		}
+		fields := credentialFields(pool.Credentials)
+		pool.MaskedFields = []string{}
+		for _, f := range fields {
+			if slices.Contains(r.PostForm["mask"], f) {
+				pool.MaskedFields = append(pool.MaskedFields, f)
+			}
+		}
+		sort.Strings(pool.MaskedFields)
+		if err := store.SaveCredentialPoolSpec(db, pool); err != nil {
+			http.Error(w, "save pool: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		renderPoolPanel(w, db, tmpl, id, poolPanelData{Message: "Masked fields saved."})
 	}
 }
 
