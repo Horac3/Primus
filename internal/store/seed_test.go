@@ -155,3 +155,38 @@ func TestSeedCollection_NameTakenByUserCollection_WritesNothing(t *testing.T) {
 		t.Error("endpoint written despite the name conflict")
 	}
 }
+
+func TestSeedCollection_RestoreWithEndpointMovedElsewhere_RestoresTheRest(t *testing.T) {
+	db := migrated(t)
+	col, reqs, cfgs := seedFixture()
+	if _, err := store.SeedCollection(db, col, reqs, cfgs, false); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateCollection(db, "Mine", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := reqs[0]
+	moved.Name = "Moved by user"
+	moved.CollectionID = other.ID
+	if err := store.SaveRequestDefinition(db, moved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteCollection(db, "col-seed"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := store.SeedCollection(db, col, reqs, cfgs, true)
+
+	if err != nil || res != store.SeedCreated {
+		t.Fatalf("restore: %v, %v", res, err)
+	}
+	got, _ := store.GetRequestDefinition(db, "seed-a")
+	if got.CollectionID != other.ID || got.Name != "Moved by user" {
+		t.Errorf("moved endpoint was disturbed: %+v", got)
+	}
+	back, err := store.GetRequestDefinition(db, "seed-b")
+	if err != nil || back.CollectionID != "col-seed" {
+		t.Errorf("other endpoint not restored: %+v, %v", back, err)
+	}
+}

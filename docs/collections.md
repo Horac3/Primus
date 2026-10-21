@@ -28,8 +28,12 @@ is something to run before you have an API of your own. It covers `/posts`,
 Each endpoint has a saved test config: a load test of 20 requests at concurrency 2,
 with assertions that match what the service really does: 200 for reads, 201 for the
 create, 404 for the missing id, and a loose p95 limit. The large `/photos` list
-returns a few hundred KB per response, so it gets a higher latency limit. Every
+returns about 1 MB per response, so it gets a higher latency limit. Every
 endpoint has a short note in the builder explaining what it shows.
+
+The endpoint builder does not load a saved config yet: it opens with its own form
+defaults (concurrency 5, 50 requests, no assertions). Set the form to the values
+above before you run an example against the live service.
 
 The collection's base URL is `https://jsonplaceholder.typicode.com`. You can edit
 the collection, its endpoints and their configs like any other; Primus never
@@ -45,7 +49,7 @@ DELETE answer `200` and change nothing. The assertions expect those status codes
 
 JSONPlaceholder ([jsonplaceholder.typicode.com](https://jsonplaceholder.typicode.com))
 is a free third-party service run by someone else, not by Primus. Keep the load low,
-leave the saved 20-request configs as they are unless you have a reason, and only
+keep to the 20-request, concurrency-2 settings unless you have a reason, and only
 test services you are allowed to test. For heavier experiments, point the
 collection's base URL at an API of your own.
 

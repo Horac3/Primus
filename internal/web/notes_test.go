@@ -81,3 +81,20 @@ func TestRequestPanel_ShowsNotesInEditor(t *testing.T) {
 func modelDef(id, collectionID, notes string) model.RequestDefinition {
 	return model.RequestDefinition{ID: id, Name: id, Method: "GET", URLTemplate: "http://x/" + id, CollectionID: collectionID, Notes: notes}
 }
+
+func TestRun_EmptyPostedNotes_ClearsExistingNotes(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	srv, _ := baseURLTarget(t)
+	col, _ := store.CreateCollection(db, "Local", srv.URL)
+	first := postForm(t, mux, "/runs", notesRunForm(url.Values{"collection_id": {col.ID}, "notes": {"old"}}))
+	pollDone(t, mux, runIDFrom(t, first.Body.String()))
+
+	rr := postForm(t, mux, "/runs", notesRunForm(url.Values{"collection_id": {col.ID}, "notes": {""}}))
+	pollDone(t, mux, runIDFrom(t, rr.Body.String()))
+
+	def, _ := store.GetRequestDefinition(db, "ep-notes")
+	if def.Notes != "" {
+		t.Errorf("Notes = %q, want cleared", def.Notes)
+	}
+}

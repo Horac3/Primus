@@ -54,6 +54,8 @@ func SeedCollection(db *sql.DB, c model.Collection, reqs []model.RequestDefiniti
 		); err != nil {
 			return fmt.Errorf("insert seed collection: %w", err)
 		}
+		// An endpoint or config the user moved out of the collection before deleting it still holds its
+		// fixed seed ID. Leave that row where the user put it instead of failing the whole restore.
 		for _, r := range reqs {
 			r.CollectionID = c.ID
 			b, err := json.Marshal(r)
@@ -61,7 +63,7 @@ func SeedCollection(db *sql.DB, c model.Collection, reqs []model.RequestDefiniti
 				return fmt.Errorf("marshal RequestDefinition: %w", err)
 			}
 			if _, err := q.Exec(
-				`INSERT INTO requests (id, name, method, url_template, payload, collection_id) VALUES (?,?,?,?,?,?)`,
+				`INSERT OR IGNORE INTO requests (id, name, method, url_template, payload, collection_id) VALUES (?,?,?,?,?,?)`,
 				r.ID, r.Name, r.Method, r.URLTemplate, string(b), c.ID,
 			); err != nil {
 				return fmt.Errorf("insert seed endpoint: %w", err)
@@ -72,7 +74,7 @@ func SeedCollection(db *sql.DB, c model.Collection, reqs []model.RequestDefiniti
 			if err != nil {
 				return fmt.Errorf("marshal TestConfig: %w", err)
 			}
-			if _, err := q.Exec(`INSERT INTO test_configs (id, request_id, payload) VALUES (?,?,?)`, tc.ID, tc.RequestID, string(b)); err != nil {
+			if _, err := q.Exec(`INSERT OR IGNORE INTO test_configs (id, request_id, payload) VALUES (?,?,?)`, tc.ID, tc.RequestID, string(b)); err != nil {
 				return fmt.Errorf("insert seed config: %w", err)
 			}
 		}

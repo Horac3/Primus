@@ -99,6 +99,11 @@ func updateCollectionHandler(db *sql.DB, tmpl *template.Template) http.HandlerFu
 func restoreExamplesHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		res, err := seed.Restore(db)
+		if errors.Is(err, store.ErrDuplicateName) {
+			renderCollectionsPanel(w, db, tmpl, collectionsView{
+				Error: "A collection named JSONPlaceholder already exists. Rename it, then restore the examples."})
+			return
+		}
 		if err != nil {
 			respondCollectionsError(w, db, tmpl, err)
 			return

@@ -37,7 +37,7 @@
     {"slug": "albums-get", "name": "Get album 1", "method": "GET", "path": "/albums/1", "status": 200, "max_p95_ms": 2000,
      "notes": "Fetch one album by id."},
     {"slug": "photos-list", "name": "List photos", "method": "GET", "path": "/photos", "status": 200, "max_p95_ms": 5000,
-     "notes": "Returns all 5000 photos, a large payload of several hundred KB per response. Latency is dominated by transfer size, so this endpoint gets a higher p95 limit (5 s). Keep its request count low."},
+     "notes": "Returns all 5000 photos, a large payload of about 1 MB per response. Latency is dominated by transfer size, so this endpoint gets a higher p95 limit (5 s). Keep its request count low."},
     {"slug": "photos-get", "name": "Get photo 1", "method": "GET", "path": "/photos/1", "status": 200, "max_p95_ms": 2000,
      "notes": "Fetch one photo by id. Compare its latency with the full /photos list to see what payload size costs."},
     {"slug": "todos-list", "name": "List todos", "method": "GET", "path": "/todos", "status": 200, "max_p95_ms": 2000,
