@@ -90,3 +90,17 @@ ollama then fell back, and authoring was shown but returned 502.
 Decision: `PRIMUS_ANALYZER: ${PRIMUS_ANALYZER:-rules}`. AI needs `PRIMUS_ANALYZER=ollama` plus `--profile ai`.
 Rejected: a startup reachability probe (no `depends_on`, so a slow Ollama would stay disabled until restart).
 Consequences: no code change; `NewAnalyzer` still does no reachability check.
+
+## D-011: Auth-probe pacing is a release ceiling; identity is chosen per run
+Date: 2026-10-21
+Status: accepted
+Context: Step 8 wires attempts, rate and credentials into the auth-probe UI. FR-PROBE-01..04. Rule 3 says there is
+no open-loop fixed req/s mode yet (step 9 owns it).
+Decision: `TestConfig.MaxRate` (`max_rate`, attempts/sec) is a ceiling: `feed` releases the n-th attempt no earlier
+than `start + n/max_rate`. The rate actually reached is ≤ `max_rate` and ≤ concurrency/latency. It is accepted for
+`auth_probe` only. `TestConfig.AuthSource` (`auth_source`: empty | `global` | `pool` | `none`) picks the identity.
+`engine.ResolveAuth` turns it into the `(AuthConfig, *CredentialPool)` that `RunWithPool` already takes, for the
+web handler and the CLI alike. `applyAuth` stays the only dispatch path.
+Rejected: a per-worker delay (the overall rate would depend on concurrency); username/password fields in the probe
+body (a second place to store and mask secrets).
+Consequences: step 9's open-loop mode is separate and must not reuse `max_rate` as its target rate.

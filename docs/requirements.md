@@ -22,6 +22,20 @@ Only planned work is written up here. Shipped behaviour is documented in the pub
   - Given a manually flagged field with an ordinary name (`nickname`) holding a known value, when a run completes,
     then that value is found in none of those places.
 
+## Auth probe (PROBE)
+- **FR-PROBE-01** — In auth-probe mode the UI labels the count field "Attempts"; it sets `total_requests`.
+- **FR-PROBE-02** — An auth-probe run takes an optional `max_rate` (attempts per second) that caps how fast attempts
+  are released. It is a ceiling, not a target: the reached rate is ≤ `max_rate` and ≤ concurrency/latency.
+  - Given `max_rate` 20 and 6 attempts, when the run completes, then it took at least 250ms (5 intervals of 50ms).
+  - Edge: 0 or empty means no cap. Negative, or set for any other mode, is rejected. Stop during a wait ends the run
+    promptly.
+- **FR-PROBE-03** — A run takes an optional `auth_source`: empty (an active pool, else global auth: unchanged),
+  `global` (global auth even when a pool is active), `pool` (requires a pool) or `none` (no auth at all).
+  - Given `auth_source` `none` and a header set to `[GLOBAL]`, when the run fires, then the target sees no auth header.
+  - Edge: `pool` with no pool is rejected before the run starts. Web and CLI resolve it the same way.
+- **FR-PROBE-04** — The rate and identity fields show only in auth-probe mode and are not submitted in other modes.
+  The running detail line names the identity used.
+
 ## Open-loop rate mode (RATE) — draft, needs `/decide` and user approval
 - **FR-RATE-01** — A user can run a test at a fixed request rate (requests/sec) for a fixed duration, independent of
   response time.
