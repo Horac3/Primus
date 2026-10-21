@@ -32,65 +32,32 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. (`b023f67`, `834c52a`, `ad970a0`)
 - [x] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
   fallback, not in the binary or image. FR-META-01..04. (`f7f8694`..`b0b87cb`)
-- [ ] C1. Collections: schema, migration, create/rename/base URL, delete collection, clear history — FR-COLL-02..06 (D-017)
+- [x] C1. Collections: schema, migration, create/rename/base URL, delete collection, clear history — FR-COLL-02..06 (D-017) (`63d529a`..`7bd3fb0`)
 - [ ] C2. JSONPlaceholder seed, seeder with tombstone, Restore examples, `docs/collections.md` — FR-SEED-01..05
 - [ ] C3. Grouped sidebar, collection page, import into a collection, run all — FR-COLL-01, 07, 08, FR-REP-03
 - [ ] C4. Per-endpoint report with trend table and the key — FR-REP-01, 02
 - [ ] C5. Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison — FR-INS-01..03
 
 ## Current step
-C1. Collections: schema, migration, create/rename/base URL, delete collection, clear history (D-017).
-Requirements: FR-COLL-02..06
-Status: planning (steps 4–14 done; C1..C5 added after step 11)
+Step C2: JSONPlaceholder seed, seeder with tombstone, Restore examples, `docs/collections.md`
+Requirements: FR-SEED-01..05 (and the restore half of FR-COLL-06)
+Status: not started (C1 done)
 
 ## Handoff notes
-- Planning done for C1..C5 (D-017, FR-COLL/SEED/REP/INS written; docs only, nothing built, nothing committed). Per-step notes
-  are in the pasted spec "Collections, the JSONPlaceholder seed, per-endpoint reports, richer insights"; `/next` should
-  plan C1 first. Spec-vs-code conflicts found:
-  1. **Roadmap position:** the spec says "after the CI and masking steps"; both (5, 6) are done and the roadmap was
-     complete, so C1..C5 sit at the end, after step 11. "Current step" is unchanged and still says roadmap complete; `/next` must pick C1.
-  2. **URLs are stored whole and used verbatim.** `requests.url_template` is a full URL; `execRequest`
-     (`internal/engine/dispatch.go:193`) uses `def.URLTemplate` as-is and `engine.Probe` goes through `execRequest`.
-     `{{base_url}}` needs a resolution step before `execRequest` (it has no collection access). `{name}` path
-     placeholders are a different syntax, already handled there. Also shown unresolved in `report.go:79`,
-     `query_filter.go:225` (history search haystack), `authoring.go`, `runs.go:41`; decide whether those show the template or the resolved URL.
-  3. **No collection concept anywhere.** `requests(id, name, method, url_template, payload)` has no collection column;
-     `Migrate` is `CREATE TABLE IF NOT EXISTS` plus `migrateMaskedFields`, with no versioned migrations, so adding a column
-     and the "My endpoints" backfill must be idempotent by hand (check `PRAGMA table_info`).
-  4. **No foreign keys.** `test_configs.request_id`, `runs.test_config_id` and `insights.run_id` are plain TEXT, so
-     "delete collection" cascades must be explicit DELETEs (endpoint -> configs -> runs -> insights) in one tx. A run's
-     endpoint is reached only through its test config. Credential pools are not per-endpoint and stay untouched.
-  5. **Active-run check lives in the web layer.** The registry (`internal/web/registry.go`) is keyed by run ID; the
-     store cannot know about active runs, so handlers must collect active run IDs for the scope and pass them in (or check first), as the spec says.
-  6. **Run has no endpoint or collection field**, so per-endpoint trend and "clear history for one endpoint" join through `test_configs`.
-     An endpoint may have several configs; FR-COLL-07 "saved test config" and FR-REP-01 "last 10 runs" need a rule for which config(s) (suggest: latest config; runs of all its configs).
-  7. **Sidebar** (`templates/sidebar.html`) is a flat `range .Endpoints` with `.Recent` dots, htmx buttons and inline
-     styles; no mobile breakpoint or focus style exists (see Watch out), which the terminal-style notes require for new views.
-  8. **Import** (`importer.ImportFromBytes/URL`) returns `[]RequestDefinition` only, with no spec title, so FR-COLL-08 needs the title returned too.
-  9. **Docs embed:** `docs/docs.go` has an explicit embed list and `order`; `collections.md` goes in both (FR-SEED-05) and the docs test list.
-  10. **Seed tests** need `{{base_url}}` (item 2) first, since `http://` hosts in `httptest` cannot be the seed's real base URL.
-- Previous handoff (step 11), still true:
-- Done (step 11, FR-META-01..04): `tools/meta` (`go run ./tools/meta`, README there): `Validate`, `RulesDraft`/`scopeForPath`,
-  `TruncateDiff`, `OllamaGenerator`, read-only `RealGit`, `run`. Tests: `TestValidate_*`, `TestScopeForPath`, `TestRulesDraft_*`,
-  `TestTruncateDiff_*`, `TestRun_*` (httptest Ollama, six fallback causes, empty diff calls no model, non-local URL refused),
-  `TestRealGit_*` (index and HEAD unchanged), `TestBinaryDoesNotDependOnTools`, `TestImageDoesNotShipTools`.
-  Reviewed (reviewer subagent); the blocking finding (empty bullet / empty `Tests:` accepted) and most minors fixed. check.sh green.
-- Next action: none planned. The roadmap is finished; add new steps to the roadmap before the next `/next`.
-- Uncommitted: `docs/progress.md` and `docs/architecture.md` until the handoff commit.
-- Decisions: added commit scope `tools` (CLAUDE.md, FR-META-02); `tools/` mapped to it. `--allow-remote` is needed for a non-loopback Ollama URL.
-- Not fixed from review: `ollama.go` sends the `Files:` list on top of the capped diff (unbounded with very many files, duplicated when
-  truncated); commit `f81ee76` is typed `test(tools)` but also touches `.dockerignore` (history not rewritten).
-- Not run: `scripts/race.sh` for step 11 (no goroutines of its own; only net/http).
-- Not done / known: Stop can leave an in-flight sign-up created on the target but unsaved (documented in the docs page);
-  `AppendCredentials` uses a deferred tx (BEGIN IMMEDIATE would avoid SQLITE_BUSY_SNAPSHOT); Stop racing the 1s poll can
-  hide the summary; no test for two overlapping registry Start calls (only visible under -race).
-- Watch out: `ui-checker` had no Playwright (no screenshots). Pre-existing global UI gaps, not fixed: no mobile `@media`
-  breakpoint (sidebar 260px at 360px), no `:focus-visible` style, link/summary blue ~3.8:1. Never put `python`/`python3`
-  in Bash here (Windows Store alias hangs). Set GOCACHE/GOTMPDIR/TMP to `D:/.gocache-primus`. CRLF-only gofmt hits on
-  untouched files: `internal/importer/importer.go`, `importer_test.go`, `internal/web/registry_test.go`.
-- Manual steps the user does by hand, never Claude: `git filter-repo`, interactive rebase, compose `depends_on`,
-  Docker Hub push, deleting `AGENTS.md`/`.bobignore`/`primus-scaffold-plan.md`/root `web/`, repo-wide `eol` rule.
-
+- Done (C1, FR-COLL-02..06, `63d529a`..`7bd3fb0`): collections + seed_tombstones tables, guarded `ALTER requests ADD collection_id`, "My endpoints"
+  migration (`TestMigrate_*`); collection CRUD/validation; `model.ExpandBaseURL`/`store.ResolveURL` used by web probe/run and CLI;
+  `DeleteCollection`/`ClearHistory` under `BEGIN IMMEDIATE` (`inImmediateTx`); registry `ActiveRequestIDs` + `scopeGuard`
+  (run start, import, delete, clear); Collections panel (`/collections`, `/history/clear`), collection select, clear buttons; docs in load/cli/history.md.
+  Reviewed (reviewer + concurrency-reviewer), fixes committed. check.sh and `scripts/race.sh` green.
+- Next action: C2. Create `internal/seed` (embedded JSON, ~20 JSONPlaceholder endpoints with `{{base_url}}` URLs, saved configs, assertions, notes).
+  Seeder sets `collections.seed_id/seed_version`, skips when `store.Tombstoned(db, seedID)` or the collection exists; "Restore examples" must clear the tombstone and
+  re-seed ("already present" if it exists). Add `docs/collections.md` to the embed list AND `order` in `docs/docs.go`, plus the docs test list.
+- Uncommitted: none, except untracked stray `internal/store/collections.go.new` (my abandoned draft; user must delete it by hand).
+- Decisions: tombstone written by `DeleteCollection` in C1 (restore is C2); base URL rejects userinfo/query/fragment; `{{base_url}}` only at URL start.
+- Watch out: ui-checker could not run (no Playwright); collections panel/new controls are NOT visually checked, and there is still no mobile breakpoint or `:focus-visible`.
+  Not fixed (nits): `StartInsight` after `GetRun` is not under the guard (clear can leave an orphan insight); collection row counts go stale after a row-level clear;
+  import-vs-delete race test is only a tripwire (passed before the guard). Sidebar is still a flat list (C3). CLI runs are invisible to the server's active-run check (documented).
+  Remaining spec-vs-code notes for C3..C5: run has no endpoint field (join via test_configs, rule needed for several configs); `importer` returns no spec title (FR-COLL-08).
 ## Log
 - 2026-10-21 claude-kit 1.4.0 installed into Primus on `ft/dev`; roadmap rebuilt from the repo state at `6e20275`
 - 2026-10-21 setup verified: `commands.env` created, `check.sh all` PASS, race run blocked (Docker down); roadmap reset to steps 4–14
@@ -109,3 +76,4 @@ Status: planning (steps 4–14 done; C1..C5 added after step 11)
 - 2026-10-21 step 13 done (race.sh green; `cd8f22d`..`bd616d5`)
 - 2026-10-21 step 14 done (`b023f67`, `834c52a`, `ad970a0`)
 - 2026-10-21 step 11 done (`f7f8694`..`b0b87cb`)
+- 2026-10-21 step C1 done (`63d529a`..`7bd3fb0`)
