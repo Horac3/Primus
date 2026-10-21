@@ -105,3 +105,27 @@ Lives under `tools/`. Local Ollama only; never a hosted model.
   `METHOD scheme://host/path`, or "endpoint deleted" when the request or config no longer exists.
   - Given an error cause `Get "http://u:p@h/x?api_key=s": dial tcp ...`, then no export contains `api_key` or `u:p`.
 - **FR-REPORT-05** — An unknown run ID returns 404 on all three routes. The run page links to the three downloads.
+
+## Credential provisioning (PROV)
+Decision: D-016. Provisioning is a user-started pool action, never part of a run.
+- **FR-PROV-01** — A user can start provisioning on a new or existing pool by giving a sign-up request template (like
+  the login spec), a count N, and an optional `Extraction` for fields to keep from the response (e.g. `user_id`).
+  The template accepts the placeholders `{{seq}}` (1..N) and `{{secret}}` (random per account, from `crypto/rand`).
+  - Given N=5 and a body `{"email":"u{{seq}}@x.test","password":"{{secret}}"}`, then five requests are sent with
+    distinct emails and distinct passwords.
+  - Edge: N above `MaxCredentialPoolRows` (counting rows already in the pool) is rejected before any request is sent.
+- **FR-PROV-02** — A row is stored only for a sign-up that returns 2xx. The row holds the generated username/secret
+  fields and any extracted fields; the secret is masked like any masked pool field (FR-CRED-04).
+  - Edge: a 4xx/5xx or transport error adds no row and counts as failed.
+- **FR-PROV-03** — Provisioning runs asynchronously through the run registry pattern (`context.WithoutCancel`), with
+  concurrency capped at the login concurrency. Stop cancels it; rows already stored stay, and requests cancelled by
+  Stop count as cancelled, not failed.
+- **FR-PROV-04** — The result reports attempted, succeeded, failed and cancelled counts with failure reasons (status
+  code or cause), like `LoginSummary`, polled every second in the UI.
+  - Given a target that returns 409 for a duplicate, then the summary lists "409" with its count.
+- **FR-PROV-05** — No generated secret, token or sign-up request body appears in logs, error messages, the summary,
+  exports or analyzer input. URLs in failure causes are reduced to `scheme://host/path` (FR-REPORT-04).
+- **FR-PROV-06** — Runs never call provisioning. A run with a pool behaves exactly as before (login phase, then
+  requests); provisioned rows are ordinary pool rows.
+- **FR-PROV-07** — `docs/credential-pools.md` documents provisioning, its limits (no account deletion on the target,
+  no email verification, no captcha) and that accounts stay on the target; it no longer says Primus never signs up.
