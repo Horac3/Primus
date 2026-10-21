@@ -108,3 +108,26 @@ Rejected: a per-worker delay (the overall rate would depend on concurrency); a s
 (`start + n/max_rate`), which bursts after a stall; username/password fields in the probe body (a second place to
 store and mask secrets).
 Consequences: step 9's open-loop mode is separate and must not reuse `max_rate` as its target rate.
+
+## D-012: Open-loop rate mode releases on an absolute schedule into idle workers
+Date: 2026-10-21
+Status: accepted
+Context: Step 9 adds a fixed req/s mode (FR-RATE-01..04). Closed-loop load hides a slow server: throughput drops to
+concurrency/latency and latency excludes the queueing the user would have seen (coordinated omission). D-011 keeps
+`max_rate` an auth-probe ceiling, so the target needs its own field.
+Decision: `mode: rate` with `TestConfig.TargetRate` (`target_rate`, req/s). It needs `duration` and
+`target_rate > 0`; `target_rate` is rejected in other modes and with `max_rate` or `burst_pattern`. In rate mode
+`concurrency` is the maximum number of requests in flight, never a rate. A scheduler replaces `feed` for this mode:
+the n-th request is due at `start + n/target_rate` (anchored to the start, so it never drifts). At each due time it
+makes a non-blocking send of the intended time on the unbuffered jobs channel, which succeeds only when a worker is
+idle; otherwise the request is counted as `Dropped`. A late wake-up attempts every overdue slot at once, so nothing
+is skipped silently. Workers stay the existing `runWorkers` (pools, re-login, payload pools), and a job carries its
+intended send time; latency is measured from it. The summary adds `dropped`, `target_rate` and `achieved_rate`
+(released requests per measured second). Any drop gives a new outcome, `fail_rate_not_sustained`, checked after
+`fail_no_requests` and before the no-assertions rule; the CLI exits 1 on it.
+Rejected: a goroutine per request behind a semaphore (a second worker path that pools and re-login would have to
+follow); a buffered queue in front of the workers (it hides drops as queueing); a `max_drop_rate` assertion (drops
+would pass silently when no assertions are set).
+Consequences: rule 3 in CLAUDE.md changes: open-loop exists, but only in rate mode. The start-anchored catch-up that
+D-011 rejected for `max_rate` is intended here: an open-loop target must try to hold its schedule.
+Revisit if: users need a tolerated drop share, or rates high enough that one scheduler goroutine cannot keep up.
