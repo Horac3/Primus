@@ -9,7 +9,7 @@ Read on demand, only the parts the task needs:
 - `docs/requirements.md`: requirement IDs for planned work. Grep by ID; do not read it whole.
 - `docs/decisions.md`: decision log. Check before contradicting an earlier choice.
 - `docs/architecture.md`: codebase map. Read before exploring.
-- `docs/*.md` (load, burst, soak, auth-probe, global-auth, credential-pools, assertions, cli) are the **public**
+- `docs/*.md` (load, burst, soak, auth-probe, global-auth, credential-pools, assertions, history, cli) are the **public**
   user reference pages, embedded in the binary and served at `/docs`. Keep them true to the behaviour.
 - `agent_instructions/` (gitignored, may be absent): private phase prompts. A roadmap step may name one as its spec.
 
