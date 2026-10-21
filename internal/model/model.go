@@ -141,6 +141,20 @@ const (
 	AuthSourceNone    AuthSource = "none"
 )
 
+// Valid reports whether s is one of the known auth sources.
+func (s AuthSource) Valid() bool {
+	switch s {
+	case AuthSourceDefault, AuthSourceGlobal, AuthSourcePool, AuthSourceNone:
+		return true
+	}
+	return false
+}
+
+// UsesPool reports whether s may run with a credential pool.
+func (s AuthSource) UsesPool() bool {
+	return s == AuthSourceDefault || s == AuthSourcePool
+}
+
 // MaxCredentialPoolRows caps how many credentials one pool may hold.
 const MaxCredentialPoolRows = 10000
 

@@ -97,6 +97,12 @@ function toggleMode() {
   document.getElementById('fields-count').style.display = count ? '' : 'none';
   document.querySelectorAll('#fields-duration input').forEach(i => i.disabled = count);
   document.querySelectorAll('#fields-count input').forEach(i => i.disabled = !count);
+  const probe = m === 'auth_probe';
+  document.getElementById('count-label').textContent = probe ? 'Attempts' : 'Total requests';
+  document.getElementById('fields-burst').style.display = m === 'burst' ? '' : 'none';
+  document.querySelectorAll('#fields-burst input').forEach(i => i.disabled = m !== 'burst');
+  document.getElementById('fields-probe').style.display = probe ? '' : 'none';
+  document.querySelectorAll('#fields-probe input, #fields-probe select').forEach(i => i.disabled = !probe);
 }
 
 async function generateRequestDefinition() {

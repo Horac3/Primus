@@ -20,6 +20,8 @@ type runHandle struct {
 	finishedAt time.Time
 	once       sync.Once
 	snapshot   atomic.Pointer[[]model.Point]
+	// detail is set before the run starts and only read afterwards.
+	detail string
 }
 
 // Registry tracks in-flight runs for async execution + polling.
@@ -133,6 +135,16 @@ func (r *Registry) Poll(id string) (status string, result *model.Run, ok bool) {
 	default:
 		return "running", nil, true
 	}
+}
+
+// Detail returns the running line for an in-flight run, or "".
+func (r *Registry) Detail(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if h := r.runs[id]; h != nil {
+		return h.detail
+	}
+	return ""
 }
 
 func (r *Registry) Snapshot(id string) []model.Point {

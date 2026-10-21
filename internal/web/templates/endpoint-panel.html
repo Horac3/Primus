@@ -127,17 +127,37 @@
   <div id="fields-count" style="margin-top:.5rem;display:none">
     <div class="row">
       <label>
-        <span>Total requests</span>
+        <span id="count-label">Total requests</span>
         <input type="number" name="total_requests" value="50" min="1" disabled>
       </label>
     </div>
-    <details style="margin-top:.5rem">
+    <details id="fields-burst" style="margin-top:.5rem">
       <summary>Burst settings</summary>
       <div class="row" style="margin-top:.5rem">
         <label><span>Requests per burst</span><input type="number" name="burst_count" value="10" min="1" disabled></label>
         <label><span>Idle between bursts (ms)</span><input type="number" name="burst_idle_ms" value="500" min="0" disabled></label>
       </div>
     </details>
+  </div>
+
+  <div id="fields-probe" style="margin-top:.5rem;display:none">
+    <div class="row">
+      <label>
+        <span>Max attempts per second (empty = no cap)</span>
+        <input type="number" name="max_rate" min="0" step="any" placeholder="no cap" disabled>
+      </label>
+      <label>
+        <span>Send as</span>
+        <select name="auth_source" disabled>
+          <option value="">Active pool, else global auth</option>
+          <option value="global">Global auth only</option>
+          <option value="pool">Active credential pool</option>
+          <option value="none">No auth</option>
+        </select>
+      </label>
+    </div>
+    <p class="muted" style="margin-top:.35rem">A ceiling, not a target: attempts also wait for a free worker,
+      so the rate reached is at most concurrency ÷ latency.</p>
   </div>
 
   <details style="margin-top:.5rem">

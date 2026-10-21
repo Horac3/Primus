@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"sort"
@@ -764,7 +765,7 @@ func probeHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 
 type runningData struct {
 	RunID      string
-	Detail     string // set on the first render only; polls re-render minimally
+	Detail     string // mode, concurrency and the identity the run sends as
 	TimeSeries []model.Point
 }
 
@@ -806,35 +807,48 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry) http.Han
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		// An active credential pool overrides global auth for the run.
-		pool, err := activeRunPool(db)
+		// An active credential pool overrides global auth for the run,
+		// unless auth_source says not to use one.
+		var pool *model.CredentialPool
+		if cfg.AuthSource.UsesPool() {
+			if pool, err = activeRunPool(db); err != nil {
+				http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		auth, err := store.GetGlobalAuth(db)
+		if err != nil {
+			http.Error(w, "load auth: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// auth_source may swap the active pool for global auth or no auth.
+		auth, pool, err = engine.ResolveAuth(cfg, auth, pool)
 		if err != nil {
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		detail := fmt.Sprintf("%s · concurrency %d", cfg.Mode, cfg.Concurrency)
-		if pool != nil {
+		switch {
+		case pool != nil:
 			cfg.CredentialPoolID = pool.ID
 			if err := engine.ValidatePool(cfg, *pool); err != nil {
 				http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 				return
 			}
 			detail += " · logging in as pool " + pool.Name
+		case auth.Type == "" || auth.Type == model.AuthTypeNone:
+			detail += " · no auth"
+		default:
+			detail += " · global auth"
 		}
 		if err := store.SaveTestConfig(db, cfg); err != nil {
 			http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		auth, err := store.GetGlobalAuth(db)
-		if err != nil {
-			http.Error(w, "load auth: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
 		// One id for the registry entry, the poll URL, and the persisted run.
 		runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
-		h := &runHandle{done: make(chan struct{})}
+		h := &runHandle{done: make(chan struct{}), detail: detail}
 		reg.startWithHandle(r.Context(), runID, h, func(ctx context.Context, h *runHandle) (model.Run, error) {
 			run, err := engine.RunWithPool(ctx, def, cfg, auth, pool, &h.snapshot)
 			if err != nil {
@@ -876,7 +890,7 @@ func renderStatus(w http.ResponseWriter, r *http.Request, db *sql.DB, tmpl *temp
 		return
 	}
 	if status == "running" || result == nil {
-		renderTemplate(w, tmpl, "running.html", runningData{RunID: id, TimeSeries: reg.Snapshot(id)})
+		renderTemplate(w, tmpl, "running.html", runningData{RunID: id, Detail: reg.Detail(id), TimeSeries: reg.Snapshot(id)})
 		return
 	}
 	ensureCompletedInsight(db, *result, analyzer)
@@ -1174,6 +1188,20 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 			return cfg, err
 		}
 		cfg.BurstPattern = &model.BurstPattern{Count: count, Idle: idle}
+	}
+
+	// The UI shows these in auth-probe mode only; any other mode that
+	// still sends max_rate is rejected by engine.ValidateTestConfig.
+	if raw := strings.TrimSpace(r.FormValue("max_rate")); raw != "" {
+		rate, err := strconv.ParseFloat(raw, 64)
+		if err != nil || rate < 0 || math.IsInf(rate, 0) || math.IsNaN(rate) {
+			return cfg, fmt.Errorf("max_rate must be a number >= 0")
+		}
+		cfg.MaxRate = rate
+	}
+	cfg.AuthSource = model.AuthSource(r.FormValue("auth_source"))
+	if !cfg.AuthSource.Valid() {
+		return cfg, fmt.Errorf("unknown auth_source %q", cfg.AuthSource)
 	}
 
 	if raw := strings.TrimSpace(r.FormValue("expected_status")); raw != "" {

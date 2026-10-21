@@ -135,3 +135,30 @@ func TestRunCmd_AuthSourcePoolWithoutPool_ExitsTwo(t *testing.T) {
 		t.Errorf("exit %d, want 2 for auth_source pool without credential_pool_id; output:\n%s", code, out.String())
 	}
 }
+
+func TestRunCmd_AuthSourceNoneIgnoresStalePool(t *testing.T) {
+	// Arrange
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{ID: "req", Method: "GET", URLTemplate: srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := writeConfigFile(t, model.TestConfig{
+		ID: "cfg", RequestID: "req", Mode: model.ModeAuthProbe, Concurrency: 1, TotalRequests: 2,
+		Assertions:       model.Assertions{ExpectedStatus: []int{200}},
+		CredentialPoolID: "deleted-pool", AuthSource: model.AuthSourceNone,
+	})
+	var out bytes.Buffer
+
+	// Act
+	code := runCmd(context.Background(), []string{cfgPath}, &out, db)
+
+	// Assert
+	if code != 0 {
+		t.Errorf("exit %d, want 0: auth_source none never uses the pool; output:\n%s", code, out.String())
+	}
+	if strings.Contains(out.String(), "deleted-pool") {
+		t.Errorf("output still names the unused pool:\n%s", out.String())
+	}
+}

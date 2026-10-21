@@ -55,7 +55,7 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 
 	// A credential pool, when the config names one, overrides global auth.
 	var pool *model.CredentialPool
-	if cfg.CredentialPoolID != "" {
+	if cfg.CredentialPoolID != "" && cfg.AuthSource.UsesPool() {
 		p, err := store.GetCredentialPoolWithSecrets(db, cfg.CredentialPoolID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "primus run: credential pool %q not found in DB\n", cfg.CredentialPoolID)
@@ -68,6 +68,9 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "primus run: %v\n", err)
 		return 2
+	}
+	if pool == nil {
+		cfg.CredentialPoolID = "" // the saved run names only a pool it used
 	}
 
 	// Execute the run using the same engine as the web handler.
