@@ -71,6 +71,71 @@ func SaveCredentialPool(db *sql.DB, p model.CredentialPool) error {
 	return tx.Commit()
 }
 
+// AppendCredentials adds rows after the pool's existing credentials and
+// merges maskFields into its masked-field list, in one transaction. The
+// pool's spec is otherwise untouched. It fails, changing nothing, when the
+// pool does not exist or the total would exceed model.MaxCredentialPoolRows.
+func AppendCredentials(db *sql.DB, poolID string, rows []model.Credential, maskFields []string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("AppendCredentials: %w", err)
+	}
+	defer tx.Rollback()
+
+	var payload string
+	if err := tx.QueryRow(`SELECT payload FROM credential_pools WHERE id = ?`, poolID).Scan(&payload); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("AppendCredentials: pool %q not found", poolID)
+		}
+		return fmt.Errorf("AppendCredentials: %w", err)
+	}
+	var p model.CredentialPool
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return fmt.Errorf("AppendCredentials: decode pool: %w", err)
+	}
+	var existing int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM credentials WHERE pool_id = ?`, poolID).Scan(&existing); err != nil {
+		return fmt.Errorf("AppendCredentials: %w", err)
+	}
+	if existing+len(rows) > model.MaxCredentialPoolRows {
+		return fmt.Errorf("AppendCredentials: %d + %d credentials exceeds the %d-row limit",
+			existing, len(rows), model.MaxCredentialPoolRows)
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO credentials (pool_id, idx, fields) VALUES (?,?,?)`)
+	if err != nil {
+		return fmt.Errorf("AppendCredentials: %w", err)
+	}
+	defer stmt.Close()
+	for i, c := range rows {
+		fields, err := json.Marshal(c)
+		if err != nil {
+			return fmt.Errorf("AppendCredentials: marshal row %d: %w", i+1, err)
+		}
+		if _, err := stmt.Exec(poolID, existing+i, string(fields)); err != nil {
+			return fmt.Errorf("AppendCredentials: insert row %d: %w", i+1, err)
+		}
+	}
+
+	merged := map[string]bool{}
+	for _, f := range append(append([]string{}, p.MaskedFields...), maskFields...) {
+		merged[f] = true
+	}
+	p.MaskedFields = make([]string, 0, len(merged))
+	for f := range merged {
+		p.MaskedFields = append(p.MaskedFields, f)
+	}
+	sort.Strings(p.MaskedFields)
+	spec, err := poolSpec(p)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE credential_pools SET payload = ? WHERE id = ?`, string(spec), poolID); err != nil {
+		return fmt.Errorf("AppendCredentials: %w", err)
+	}
+	return tx.Commit()
+}
+
 // legacySecretMarkers is the substring rule masking used before per-field
 // flags. migrateMaskedFields uses it so existing pools keep what they hid.
 var legacySecretMarkers = []string{"pass", "secret", "token", "key", "pin", "otp"}

@@ -292,3 +292,74 @@ func TestActiveCredentialPool_SetGetClear(t *testing.T) {
 		t.Errorf("set=%q (err %v), cleared=%q (err %v); want pool-1 then empty", afterSet, setErr, afterClear, clearErr)
 	}
 }
+
+func TestAppendCredentials_AppendsAfterExistingRowsAndMergesMasking(t *testing.T) {
+	db := migratedDB(t)
+	pool := samplePool()
+	pool.MaskedFields = []string{"password"}
+	if err := store.SaveCredentialPool(db, pool); err != nil {
+		t.Fatalf("SaveCredentialPool: %v", err)
+	}
+
+	rows := []model.Credential{
+		{"username": "carol", "password": "pw-carol", "api_token": "t-1"},
+		{"username": "dave", "password": "pw-dave", "api_token": "t-2"},
+	}
+	if err := store.AppendCredentials(db, pool.ID, rows, []string{"password", "api_token"}); err != nil {
+		t.Fatalf("AppendCredentials: %v", err)
+	}
+
+	got, err := store.GetCredentialPoolWithSecrets(db, pool.ID)
+	if err != nil {
+		t.Fatalf("GetCredentialPoolWithSecrets: %v", err)
+	}
+	if len(got.Credentials) != 4 {
+		t.Fatalf("rows = %d, want 4", len(got.Credentials))
+	}
+	if got.Credentials[1]["username"] != "bob" || got.Credentials[2]["username"] != "carol" || got.Credentials[3]["username"] != "dave" {
+		t.Errorf("order not preserved: %v", got.Credentials)
+	}
+	if got.Login.URL != pool.Login.URL {
+		t.Errorf("spec was changed: %+v", got.Login)
+	}
+	if strings.Join(got.MaskedFields, ",") != "api_token,password" {
+		t.Errorf("masked fields = %v, want api_token and password once each", got.MaskedFields)
+	}
+
+	masked, err := store.GetCredentialPoolMasked(db, pool.ID)
+	if err != nil {
+		t.Fatalf("GetCredentialPoolMasked: %v", err)
+	}
+	for _, c := range masked.Credentials {
+		if strings.Contains(c["password"], "pw-") || strings.Contains(c["api_token"], "t-") {
+			t.Errorf("masked read leaks a secret: %v", c)
+		}
+	}
+}
+
+func TestAppendCredentials_RejectsOverTheRowCapAndLeavesPoolUntouched(t *testing.T) {
+	db := migratedDB(t)
+	pool := samplePool()
+	if err := store.SaveCredentialPool(db, pool); err != nil {
+		t.Fatalf("SaveCredentialPool: %v", err)
+	}
+	rows := make([]model.Credential, model.MaxCredentialPoolRows-1) // 2 existing + this > cap
+	for i := range rows {
+		rows[i] = model.Credential{"username": "u", "password": "p"}
+	}
+	if err := store.AppendCredentials(db, pool.ID, rows, nil); err == nil {
+		t.Fatal("want an error when existing + new rows exceed the cap")
+	}
+	got, _ := store.GetCredentialPoolWithSecrets(db, pool.ID)
+	if len(got.Credentials) != 2 {
+		t.Fatalf("rows = %d, want the original 2", len(got.Credentials))
+	}
+}
+
+func TestAppendCredentials_UnknownPool(t *testing.T) {
+	db := migratedDB(t)
+	err := store.AppendCredentials(db, "nope", []model.Credential{{"a": "b"}}, nil)
+	if err == nil {
+		t.Fatal("want an error for an unknown pool")
+	}
+}
