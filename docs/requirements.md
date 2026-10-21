@@ -88,3 +88,20 @@ Lives under `tools/`. Local Ollama only; never a hosted model.
 - **FR-META-04** — Excluded from the binary and image: nothing under `tools/` is imported by `cmd/primus` or
   `internal/...`, and `deploy/Dockerfile` does not copy it into the final image.
   - Given `go list -deps ./cmd/primus`, then no `tools/` package appears.
+
+## Downloadable run reports (REPORT)
+- **FR-REPORT-01** — `GET /runs/{id}/report.html` downloads (`Content-Disposition: attachment`) a self-contained HTML
+  report: inline CSS, no scripts, no `hx-*`, no external URLs. It shows the verdict (tri-state wording), mode,
+  concurrency, start, finish and duration, the endpoint, summary metrics (total, errors, error rate, p50/p95/p99,
+  cancelled, dropped, and target/achieved rate in `mode: rate`), assertions, the time-series SVG charts, the latency
+  histogram, status counts, error causes, the login summary when a pool ran, and the insight with the analyzer and
+  model that produced it (or "no insight generated").
+- **FR-REPORT-02** — `GET /runs/{id}/series.csv` has the header `elapsed_ms,avg_latency_ms,rps,error_rate` and one row
+  per time-series point; a run without a series gets the header only.
+- **FR-REPORT-03** — `GET /runs/{id}/report.md` is a Markdown summary with the same facts as the HTML report, without
+  charts. Metrics, assertions and errors are tables; the insight sits under a heading that names the analyzer.
+- **FR-REPORT-04** — No export, run page or result card contains a URL query string, URL userinfo, header, body,
+  credential or token. URLs inside error causes keep only `scheme://host/path`. The endpoint is shown as
+  `METHOD scheme://host/path`, or "endpoint deleted" when the request or config no longer exists.
+  - Given an error cause `Get "http://u:p@h/x?api_key=s": dial tcp ...`, then no export contains `api_key` or `u:p`.
+- **FR-REPORT-05** — An unknown run ID returns 404 on all three routes. The run page links to the three downloads.
