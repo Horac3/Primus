@@ -25,6 +25,9 @@ internal/credential/ credential types, CSV/JSON import, extraction helpers
 internal/importer/ OpenAPI 2/3 import (secondary path)
 docs/            public reference pages (embedded, served at /docs) + maintainer files (progress, decisions, ...)
 deploy/          Dockerfile (distroless), docker-compose.yml (profile `ai` adds Ollama), docker-compose.gpu.yml
+tools/meta/     dev-only commit-message assistant (`go run ./tools/meta`): main.go (flags, run) · git.go (read-only
+                 `git diff --cached`) · ollama.go (local model draft) · rules.go (path-based fallback) · validate.go ·
+                 truncate.go. Never imported by cmd/primus; `tools/` is in .dockerignore (FR-META-04, tested)
 web/             old Bob-era copy of templates/static, not used by the app (known stray)
 ```
 

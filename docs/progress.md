@@ -30,26 +30,26 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] 12. Downloadable test reports and insights (FR-REPORT-01..05, D-015).
 - [x] 13. Credential provisioning (FR-PROV-01..07, D-016). Built, reviewed, committed; `scripts/race.sh` green. (`cd8f22d`..`bd616d5`)
 - [x] 14. Refactor: split `internal/web/web.go` and `internal/engine/engine.go` by concern. (`b023f67`, `834c52a`, `ad970a0`)
-- [ ] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
-  fallback, not in the binary or image. FR-META-01..04. Requirements written; not planned yet.
+- [x] 11. Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`. Ollama only, rules
+  fallback, not in the binary or image. FR-META-01..04. (`f7f8694`..`b0b87cb`)
 
 ## Current step
-Step 11: Dev tooling, last in the roadmap: local commit-message assistant ("meta") under `tools/`
-Requirements: FR-META-01..04
-Status: not started (requirements written, not planned)
+Roadmap complete: steps 4–14 are all done. No next step is planned.
+Requirements: none open
+Status: done (step 11 closed, `f7f8694`..`b0b87cb`)
 
 ## Handoff notes
-- Done (step 13, D-016 accepted, FR-PROV-01..07 written): `engine.Provision`/`GenerateSecret` (`internal/engine/provision.go`),
-  `store.AppendCredentials` + `CredentialPool.ProvisionedSeq`, generic `registry[T]` (Registry/runHandle kept as aliases),
-  `internal/web/provision.go` (POST /pools/provision, GET .../{id}/status, POST .../{id}/stop, one job per pool, concurrency
-  capped at the pool's login concurrency), panel form in `pools-panel.html`, docs in `docs/credential-pools.md`. Tests:
-  `TestProvision_*` (engine and web), `TestGenerateSecret`, `TestAppendCredentials_*`. Concurrency and general reviews done and fixed.
-- Race run: `scripts/race.sh` green on all packages (2026-10-21), step 13 closed.
-- Step 14 done: web.go split into web/templates/auth/requests/authoring/runs/insight/history/docs.go (`834c52a`), code
-  moved verbatim (only `// ----` divider comments dropped), full check.sh green, reviewed, architecture.md updated.
-- Next action: step 11, plan FR-META-01..04 (`tools/` commit-message assistant) in plan mode.
-- Uncommitted: `docs/progress.md` until the handoff commit.
-- Decisions: none beyond D-016 (rule 7 in CLAUDE.md and D-004 already updated).
+- Done (step 11, FR-META-01..04): `tools/meta` (`go run ./tools/meta`, README there): `Validate`, `RulesDraft`/`scopeForPath`,
+  `TruncateDiff`, `OllamaGenerator`, read-only `RealGit`, `run`. Tests: `TestValidate_*`, `TestScopeForPath`, `TestRulesDraft_*`,
+  `TestTruncateDiff_*`, `TestRun_*` (httptest Ollama, six fallback causes, empty diff calls no model, non-local URL refused),
+  `TestRealGit_*` (index and HEAD unchanged), `TestBinaryDoesNotDependOnTools`, `TestImageDoesNotShipTools`.
+  Reviewed (reviewer subagent); the blocking finding (empty bullet / empty `Tests:` accepted) and most minors fixed. check.sh green.
+- Next action: none planned. The roadmap is finished; add new steps to the roadmap before the next `/next`.
+- Uncommitted: `docs/progress.md` and `docs/architecture.md` until the handoff commit.
+- Decisions: added commit scope `tools` (CLAUDE.md, FR-META-02); `tools/` mapped to it. `--allow-remote` is needed for a non-loopback Ollama URL.
+- Not fixed from review: `ollama.go` sends the `Files:` list on top of the capped diff (unbounded with very many files, duplicated when
+  truncated); commit `f81ee76` is typed `test(tools)` but also touches `.dockerignore` (history not rewritten).
+- Not run: `scripts/race.sh` for step 11 (no goroutines of its own; only net/http).
 - Not done / known: Stop can leave an in-flight sign-up created on the target but unsaved (documented in the docs page);
   `AppendCredentials` uses a deferred tx (BEGIN IMMEDIATE would avoid SQLITE_BUSY_SNAPSHOT); Stop racing the 1s poll can
   hide the summary; no test for two overlapping registry Start calls (only visible under -race).
@@ -77,3 +77,4 @@ Status: not started (requirements written, not planned)
 - 2026-10-21 step 13 partial (`cd8f22d`..`bd616d5`; race run pending)
 - 2026-10-21 step 13 done (race.sh green; `cd8f22d`..`bd616d5`)
 - 2026-10-21 step 14 done (`b023f67`, `834c52a`, `ad970a0`)
+- 2026-10-21 step 11 done (`f7f8694`..`b0b87cb`)
