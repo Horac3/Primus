@@ -130,7 +130,7 @@ h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase;
 {{if and .Insight (eq .Insight.Status "done")}}
 <p><strong>via {{.Insight.Analyzer}}{{if .Insight.Model}} ({{.Insight.Model}}){{end}}</strong></p>
 {{if .Sections}}
-{{if .Sections.FallbackFrom}}<p class="muted">Written by the rules analyzer because {{.Sections.FallbackFrom}} failed or gave an answer that did not match the run's numbers.</p>{{end}}
+{{if .Sections.FallbackFrom}}<p class="muted">Written by the rules analyzer because {{analyzerName .Sections.FallbackFrom}} failed or gave an answer that did not match the run's numbers.</p>{{end}}
 <h3>What the numbers say</h3>
 <ul>{{range .Sections.Numbers}}<li>{{redact .}}</li>{{end}}</ul>
 <h3>Likely causes</h3>

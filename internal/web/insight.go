@@ -131,6 +131,14 @@ func previousAggregates(db *sql.DB, runID string) *insight.PreviousAggregates {
 	return insight.AggregatesOf(*previous)
 }
 
+// analyzerDisplayName is how the fallback note names the analyzer that failed, on every page.
+func analyzerDisplayName(name string) string {
+	if name == "ollama" {
+		return "Ollama"
+	}
+	return name
+}
+
 func analyzerModelName(analyzer insight.Analyzer) string {
 	if modelNamer, ok := analyzer.(interface{ ModelName() string }); ok {
 		return modelNamer.ModelName()

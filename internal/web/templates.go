@@ -38,9 +38,10 @@ func outcomeLabel(o model.RunOutcome) string {
 
 // templateFuncs are helpers available inside every template.
 var templateFuncs = template.FuncMap{
-	"mul":        func(a, b float64) float64 { return a * b },
-	"redact":     redactURLs,
-	"readingKey": readingKey,
+	"mul":          func(a, b float64) float64 { return a * b },
+	"redact":       redactURLs,
+	"analyzerName": analyzerDisplayName,
+	"readingKey":   readingKey,
 	"reportDuration": func(r model.Run) string {
 		return r.FinishedAt.Sub(r.StartedAt).Round(time.Millisecond).String()
 	},

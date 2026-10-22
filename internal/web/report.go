@@ -208,7 +208,7 @@ func renderMarkdown(rd reportData) string {
 		if s := rd.Sections; s != nil {
 			fmt.Fprintf(&b, "## Insight (%s)\n\n", who)
 			if s.FallbackFrom != "" {
-				fmt.Fprintf(&b, "Written by the rules analyzer because %s failed or gave an answer that did not match the run's numbers.\n\n", s.FallbackFrom)
+				fmt.Fprintf(&b, "Written by the rules analyzer because %s failed or gave an answer that did not match the run's numbers.\n\n", analyzerDisplayName(s.FallbackFrom))
 			}
 			writeInsightList(&b, "What the numbers say", s.Numbers)
 			writeInsightList(&b, "Likely causes", s.Causes)

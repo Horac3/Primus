@@ -9,7 +9,7 @@
     {{end}}
     {{if and .Insight (eq .Insight.Status "done")}}
     {{if .Sections}}
-      {{if .Sections.FallbackFrom}}<p class="muted">Written by the rules analyzer because {{if eq .Sections.FallbackFrom "ollama"}}Ollama{{else}}{{.Sections.FallbackFrom}}{{end}} failed or gave an answer that did not match the run's numbers.</p>{{end}}
+      {{if .Sections.FallbackFrom}}<p class="muted">Written by the rules analyzer because {{analyzerName .Sections.FallbackFrom}} failed or gave an answer that did not match the run's numbers.</p>{{end}}
       <h3>What the numbers say</h3>
       <ul>{{range .Sections.Numbers}}<li>{{.}}</li>{{end}}</ul>
       <h3>Likely causes</h3>
