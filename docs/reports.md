@@ -24,8 +24,34 @@ or click a run in History) and use the **Download** links under the run ID.
 - The time-series charts and latency buckets (HTML only).
 - The insight and which analyzer wrote it (`rules` or the Ollama model), or
   `No insight generated` if you never asked for one. Generate the insight first
-  on the run page if you want it in the file.
+  on the run page if you want it in the file. See **Insight sections** below.
 - A **How to read this** key at the end. See below.
+
+## Insight sections
+
+Every insight has the same three sections, whichever analyzer wrote it:
+
+- **What the numbers say**: requests, throughput, percentiles and error rate
+  (and logins when a credential pool ran), plus notes such as "no assertions
+  were configured".
+- **Likely causes**: what the findings point to, or a line saying nothing in the
+  numbers points to a problem.
+- **What to try next**: one step per finding.
+
+When the endpoint has an earlier run, a fourth section, **Compared with the
+previous run**, says what moved, for example "p95 rose from 120 ms to 310 ms".
+The previous run is the endpoint's newest earlier run that completed at least
+one request, from any of its saved configs. If mode or concurrency differ, the
+section says so, because the two runs are then not like for like. An endpoint
+with a single run has no comparison section.
+
+The comparison is written by Primus from the two runs' stored numbers, never by
+the model. Ollama only sees aggregates: counts, percentiles, rates and
+normalized URLs, never bodies, headers, credentials or tokens. If an Ollama
+answer quotes a number that is not in those aggregates, or the call fails,
+Primus uses the rules analyzer for that insight and the insight says so.
+Insights generated before these sections existed keep showing their original
+text.
 
 ## How to read this
 
@@ -63,8 +89,8 @@ shows:
 - A table of the last 10 runs, newest first, so you can see a regression
   appear: time, requests, p50, p95, p99, error %, throughput, cancelled and
   verdict.
-- The latest run's findings: the insight if you generated one, or a button to
-  generate it.
+- The latest run's findings: the insight sections if you generated one, or a
+  button to generate it.
 - The key above.
 
 An endpoint with no runs shows **no runs yet** and a **Run** button that opens
