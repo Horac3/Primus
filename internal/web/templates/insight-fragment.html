@@ -8,7 +8,21 @@
     <p><strong>via {{.Insight.Analyzer}} ({{.Insight.Model}})</strong></p>
     {{end}}
     {{if and .Insight (eq .Insight.Status "done")}}
+    {{if .Sections}}
+      {{if .Sections.FallbackFrom}}<p class="muted">Written by the rules analyzer because {{if eq .Sections.FallbackFrom "ollama"}}Ollama{{else}}{{.Sections.FallbackFrom}}{{end}} failed or gave an answer that did not match the run's numbers.</p>{{end}}
+      <h3>What the numbers say</h3>
+      <ul>{{range .Sections.Numbers}}<li>{{.}}</li>{{end}}</ul>
+      <h3>Likely causes</h3>
+      <ul>{{range .Sections.Causes}}<li>{{.}}</li>{{end}}</ul>
+      <h3>What to try next</h3>
+      <ul>{{range .Sections.NextSteps}}<li>{{.}}</li>{{end}}</ul>
+      {{if .Sections.Comparison}}
+      <h3>Compared with the previous run</h3>
+      <ul>{{range .Sections.Comparison}}<li>{{.}}</li>{{end}}</ul>
+      {{end}}
+    {{else}}
     <p>{{.Insight.Text}}</p>
+    {{end}}
     {{else if and .Insight (eq .Insight.Status "failed")}}
     <p class="muted">Insight generation failed: {{.Insight.Error}}</p>
     {{end}}

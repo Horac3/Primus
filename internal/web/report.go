@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Horac3/Primus/internal/insight"
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
 )
@@ -54,12 +55,15 @@ type reportData struct {
 	model.Run
 	Endpoint string
 	Insight  *store.InsightRecord
+	// Sections is nil for an insight saved before sections existed; reports then print its text.
+	Sections *insight.Sections
 }
 
 func buildReportData(db *sql.DB, run model.Run) reportData {
 	rd := reportData{Run: run, Endpoint: endpointLabel(db, run.TestConfigID)}
 	if rec, err := store.GetInsight(db, run.ID); err == nil {
 		rd.Insight = &rec
+		rd.Sections = decodeSections(rec)
 	}
 	return rd
 }
@@ -201,12 +205,33 @@ func renderMarkdown(rd reportData) string {
 		if rd.Insight.Model != "" {
 			who += " / " + rd.Insight.Model
 		}
-		fmt.Fprintf(&b, "## Insight (%s)\n\n%s\n", who, redactURLs(rd.Insight.Text))
+		if s := rd.Sections; s != nil {
+			fmt.Fprintf(&b, "## Insight (%s)\n\n", who)
+			if s.FallbackFrom != "" {
+				fmt.Fprintf(&b, "Written by the rules analyzer because %s failed or gave an answer that did not match the run's numbers.\n\n", s.FallbackFrom)
+			}
+			writeInsightList(&b, "What the numbers say", s.Numbers)
+			writeInsightList(&b, "Likely causes", s.Causes)
+			writeInsightList(&b, "What to try next", s.NextSteps)
+			if len(s.Comparison) > 0 {
+				writeInsightList(&b, "Compared with the previous run", s.Comparison)
+			}
+		} else {
+			fmt.Fprintf(&b, "## Insight (%s)\n\n%s\n", who, redactURLs(rd.Insight.Text))
+		}
 	default:
 		b.WriteString("## Insight\n\nNo insight generated.\n")
 	}
 	writeKeyMarkdown(&b, rd.Login)
 	return b.String()
+}
+
+func writeInsightList(b *strings.Builder, heading string, lines []string) {
+	fmt.Fprintf(b, "### %s\n\n", heading)
+	for _, line := range lines {
+		fmt.Fprintf(b, "- %s\n", redactURLs(line))
+	}
+	b.WriteString("\n")
 }
 
 var unsafeFilenameChars = regexp.MustCompile(`[^A-Za-z0-9_-]`)
