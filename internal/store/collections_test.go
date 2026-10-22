@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -484,6 +486,9 @@ func TestScopeRequestIDs(t *testing.T) {
 func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
 	f := newFixture(t) // b1 has config cfg-b1; the writer keeps adding runs to it
 	stop := make(chan struct{})
+	writerErr := make(chan error, 1) // reported from the test goroutine: t.Errorf after the test returns panics
+	const maxWriterRetries = 20
+	var saved atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -494,14 +499,41 @@ func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
 				return
 			default:
 			}
-			if err := store.SaveRun(f.db, model.Run{ID: fmt.Sprintf("w-%d", i), TestConfigID: "cfg-b1"}); err != nil {
-				t.Errorf("writer SaveRun: %v", err)
+			// The helper writer retries on SQLITE_BUSY: SQLite's busy handler polls instead of queuing, so a
+			// back-to-back writer can be starved past busy_timeout. That is documented behaviour, and it is
+			// not what this test guards; delete and clear below are never retried.
+			var err error
+			for try := 0; try <= maxWriterRetries; try++ {
+				if err = store.SaveRun(f.db, model.Run{ID: fmt.Sprintf("w-%d", i), TestConfigID: "cfg-b1"}); err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") {
+					break
+				}
+			}
+			if err != nil {
+				writerErr <- err
 				return
 			}
+			saved.Add(1)
+			// SQLite's busy handler is not fair: a writer that never pauses can starve the other connection
+			// past busy_timeout. Real writers (finishing runs) are not back to back.
+			time.Sleep(time.Millisecond)
 		}
 	}()
+	var stopOnce sync.Once
+	join := func() {
+		stopOnce.Do(func() { close(stop) })
+		wg.Wait()
+	}
+	defer join() // also covers t.Fatal below, so the writer never outlives the test
 
-	for i := 0; i < 60; i++ {
+	// Run until the writer has landed enough saves to overlap the delete and clear calls, not for a fixed
+	// number of back-to-back iterations: the loop is bounded by the writer's progress.
+	const wantSaves, minIters, maxIters = 20, 5, 60
+	for i := 0; i < maxIters && (i < minIters || saved.Load() < wantSaves); i++ {
+		select {
+		case err := <-writerErr:
+			t.Fatalf("writer SaveRun: %v", err)
+		default:
+		}
 		col, err := store.CreateCollection(f.db, fmt.Sprintf("Temp%d", i), "")
 		if err != nil {
 			t.Fatal(err)
@@ -515,9 +547,14 @@ func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
 		if _, err := store.ClearHistory(f.db, store.Scope{Kind: store.ScopeEndpoint, ID: "a1"}); err != nil {
 			t.Errorf("ClearHistory #%d: %v", i, err)
 		}
+		time.Sleep(5 * time.Millisecond) // both sides pace themselves: the busy handler polls, so back-to-back writers starve each other
 	}
-	close(stop)
-	wg.Wait()
+	join()
+	select {
+	case err := <-writerErr:
+		t.Errorf("writer SaveRun: %v", err)
+	default:
+	}
 }
 
 func TestListRequestDefinitionsByCollection_OnlyThatCollectionByName(t *testing.T) {
