@@ -34,28 +34,29 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
   fallback, not in the binary or image. FR-META-01..04. (`f7f8694`..`b0b87cb`)
 - [x] C1. Collections: schema, migration, create/rename/base URL, delete collection, clear history — FR-COLL-02..06 (D-017) (`63d529a`..`7bd3fb0`)
 - [x] C2. JSONPlaceholder seed, seeder with tombstone, Restore examples, `docs/collections.md` — FR-SEED-01..05
-- [ ] C3. Grouped sidebar, collection page, import into a collection, run all — FR-COLL-01, 07, 08, FR-REP-03
+- [~] C3. Grouped sidebar, collection page, import into a collection, run all — FR-COLL-01, 07, 08, FR-REP-03 (`fb43439`..`e12d36e`; `scripts/race.sh` still to run)
 - [ ] C4. Per-endpoint report with trend table and the key — FR-REP-01, 02
 - [ ] C5. Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison — FR-INS-01..03
 
 ## Current step
 Step C3: Grouped sidebar, collection page, import into a collection, run all
 Requirements: FR-COLL-01, 07, 08, FR-REP-03
-Status: not started (C2 done)
+Status: in progress — all behaviours built, reviewed and committed; only `scripts/race.sh` is outstanding (Docker daemon was off)
 
 ## Handoff notes
-- Done (C2, FR-SEED-01..05, FR-COLL-06 restore, `a036b32`..`8884eba`): `Notes` on RequestDefinition (`TestSaveAndGetRequestDefinition_KeepsNotes`);
-  `store.SeedCollection` in one immediate tx (`TestSeedCollection_*`, incl. moved-endpoint restore); `internal/seed` (21 endpoints, `TestLoad_*`, `TestEnsure_*`);
-  `seed.Ensure` at server start only; `POST /collections/restore` + button (`TestRestoreExamples_*`); Notes textarea in builder (`notes_test.go`); `docs/collections.md`.
-  Reviewed; 2 blocking findings fixed. check.sh and `scripts/race.sh` green before the review fixes (fixes touch no goroutine code).
-- Next action: C3. Grouped sidebar (by collection), collection page, import into a collection, run all (FR-COLL-01, 07, 08, FR-REP-03). Read those IDs first.
+- Done (C3, `fb43439`..`e12d36e`): store `ListRequestDefinitionsByCollection`, `LatestTestConfig`, `LatestRunsByRequest`, `CreateCollectionUnique`, `SetCollectionExpanded` (`collections.expanded` column);
+  `importer.ParseSpec/FetchSpec` (title); grouped sidebar + `POST /collections/{id}/expanded` (`TestSidebar_*`); import into a new collection (`TestImport_*`);
+  collection page (`TestCollectionPage_*`); `startConfiguredRun` extracted from `postRunHandler`; run all (`internal/web/sequence.go`, `TestRunAll_*`); `docs/collections.md`. Reviewed (no blocking); fixes in `43697d9`, `e12d36e`. `go test ./...` and `go vet ./...` green.
+- Next action: start Docker Desktop, run `scripts/race.sh` (new goroutine code in `internal/web/sequence.go`); if green, mark C3 `[x]` and begin C4.
 - Uncommitted: none, except untracked stray `internal/store/collections.go.new` (user must delete it by hand).
-- Decisions: `Ensure` also seeds existing installs on upgrade (spec says fresh install); restore handler takes no `scopeGuard` (insert-only, serialized by the immediate tx);
-  seeded rows keep fixed IDs `seed-jp-<slug>`; on restore an existing row with a seed ID (user moved it) is left where it is.
-- Watch out: the builder does NOT load saved test configs (form defaults 5/50, no assertions), so seeded configs only matter for "run all" (C3, FR-COLL-07 must use them);
-  docs/collections.md says so. Commit `ec44a4c` uses scope `seed`, not in the CLAUDE.md list (history not rewritten). CLAUDE.md layout line and docs/architecture.md lack `internal/seed`.
-  Collections panel Restore button not visually checked (no Playwright). Earlier C1 nits still open (see git log `ebc704c`).
-- Run /remap: new package `internal/seed`.
+- Decisions: "saved config" = newest `test_configs` row per request (max rowid); import makes a fresh collection each time with IDs `<colID>-<opID>`; `ParseSpec` added next to
+  the old `ImportFrom*` wrappers; run-all joins an already-running sequence for the same collection; sequences linger 5 min (TTL sweep). Commit `b723f23` relaxed one over-specified test (ID -> Name).
+- Watch out: not visually checked (no browser): sidebar collapse persistence, collection page, Run all/Stop. Open nits from review: deleting a collection in the gap between two runs of a sequence succeeds and
+  skips the rest (could refuse while a sequence is unfinished); `LatestRunsByRequest` reads every run payload (use ROW_NUMBER if history is large); a run-all item links its report while still running (404 until saved);
+  untested: item start failure reason, Stop before first item, delete mid-sequence. `runID` in `startConfiguredRun` still uses UnixNano only (same-tick clash possible on Windows).
+  The builder still does not load saved configs (docs say so). C1 nits and the C2 `internal/seed` remap note still apply.
+- Run /remap: new `internal/seed` package, plus `internal/web/{sequence,collection_page}.go`.
+
 ## Log
 - 2026-10-21 claude-kit 1.4.0 installed into Primus on `ft/dev`; roadmap rebuilt from the repo state at `6e20275`
 - 2026-10-21 setup verified: `commands.env` created, `check.sh all` PASS, race run blocked (Docker down); roadmap reset to steps 4–14
@@ -76,3 +77,4 @@ Status: not started (C2 done)
 - 2026-10-21 step 11 done (`f7f8694`..`b0b87cb`)
 - 2026-10-21 step C1 done (`63d529a`..`7bd3fb0`)
 - 2026-10-21 step C2 done (`a036b32`..`8884eba`)
+- 2026-10-22 step C3 partial (`fb43439`..`e12d36e`; race.sh pending)
