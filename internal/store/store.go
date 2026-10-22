@@ -446,14 +446,18 @@ const previousRunScan = 20
 // before the given run and completed at least one request. It returns nil, nil when there is none. An unknown
 // run is an error, so a caller cannot mistake a missing run for a first run.
 func PreviousRunOfEndpoint(db *sql.DB, runID string) (*model.Run, error) {
-	var requestID, startedAt string
-	err := db.QueryRow(`SELECT c.request_id, r.started_at FROM runs r JOIN test_configs c ON c.id = r.test_config_id
-		WHERE r.id = ?`, runID).Scan(&requestID, &startedAt)
+	var requestID, startedAt, ownPayload string
+	err := db.QueryRow(`SELECT c.request_id, r.started_at, r.payload FROM runs r JOIN test_configs c ON c.id = r.test_config_id
+		WHERE r.id = ?`, runID).Scan(&requestID, &startedAt, &ownPayload)
 	if err != nil {
 		return nil, fmt.Errorf("PreviousRunOfEndpoint %q: %w", runID, err)
 	}
+	var own model.Run
+	if err := json.Unmarshal([]byte(ownPayload), &own); err != nil {
+		return nil, fmt.Errorf("unmarshal Run: %w", err)
+	}
 	rows, err := db.Query(`SELECT r.payload FROM runs r JOIN test_configs c ON c.id = r.test_config_id
-		WHERE c.request_id = ? AND r.id != ? AND r.started_at < ?
+		WHERE c.request_id = ? AND r.id != ? AND r.started_at <= ?
 		ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?`, requestID, runID, startedAt, previousRunScan)
 	if err != nil {
 		return nil, fmt.Errorf("PreviousRunOfEndpoint %q: %w", runID, err)
@@ -472,16 +476,22 @@ func PreviousRunOfEndpoint(db *sql.DB, runID string) (*model.Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	// started_at is stored to the second, so the query over-includes the run's own second; the payload's
+	// full-precision StartedAt decides which candidates really came first.
+	var best *model.Run
 	for _, p := range payloads {
 		var r model.Run
 		if err := json.Unmarshal([]byte(p), &r); err != nil {
 			return nil, fmt.Errorf("unmarshal Run: %w", err)
 		}
-		if r.Summary.TotalRequests > 0 {
-			return &r, nil
+		if r.Summary.TotalRequests == 0 || !r.StartedAt.Before(own.StartedAt) {
+			continue
+		}
+		if best == nil || r.StartedAt.After(best.StartedAt) {
+			best = &r
 		}
 	}
-	return nil, nil
+	return best, nil
 }
 
 // ListRuns returns all Runs for a given TestConfig ID.

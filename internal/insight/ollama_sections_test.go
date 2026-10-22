@@ -87,3 +87,10 @@ func TestOllamaInput_CarriesAggregatesOnly(t *testing.T) {
 		t.Errorf("model input should carry the previous aggregates and normalized URLs: %s", sent)
 	}
 }
+
+func TestOllamaSections_EmptyNextStepsAreRejected(t *testing.T) {
+	analyzer := ollamaReplying(t, `{"message":{"content":"{\"headline\":\"ok\",\"explanation\":\"fine\",\"next_steps\":[]}"}}`, nil)
+	if _, err := analyzer.Analyze(context.Background(), Summary{}, nil); err == nil {
+		t.Fatal("an insight with no next steps breaks the fixed sections, want the rules fallback")
+	}
+}

@@ -107,3 +107,27 @@ func TestPreviousRunOfEndpoint(t *testing.T) {
 		t.Fatal("an unknown run must be an error, not a silent no-comparison")
 	}
 }
+
+func TestPreviousRunOfEndpoint_SeesRunsStartedInTheSameSecond(t *testing.T) {
+	db := migrated(t)
+	if err := store.SaveTestConfig(db, model.TestConfig{ID: "c1", RequestID: "r1"}); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for i, id := range []string{"a", "b", "c"} {
+		at := t0.Add(time.Duration(i) * 100 * time.Millisecond)
+		run := model.Run{ID: id, TestConfigID: "c1", StartedAt: at, FinishedAt: at}
+		run.Summary.TotalRequests = 5
+		if err := store.SaveRun(db, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.PreviousRunOfEndpoint(db, "c")
+	if err != nil || got == nil || got.ID != "b" {
+		t.Fatalf("previous of c = %+v, %v; want b", got, err)
+	}
+	got, err = store.PreviousRunOfEndpoint(db, "a")
+	if err != nil || got != nil {
+		t.Fatalf("previous of a = %+v, %v; want none", got, err)
+	}
+}

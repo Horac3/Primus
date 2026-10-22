@@ -129,7 +129,7 @@ func (a OllamaAnalyzer) Analyze(ctx context.Context, summary Summary, findings [
 	if err := json.Unmarshal([]byte(chatResponse.Message.Content), &generated); err != nil {
 		return Insight{}, fmt.Errorf("decode Ollama insight JSON: %w", err)
 	}
-	if strings.TrimSpace(generated.Headline) == "" || strings.TrimSpace(generated.Explanation) == "" || generated.NextSteps == nil {
+	if strings.TrimSpace(generated.Headline) == "" || strings.TrimSpace(generated.Explanation) == "" || len(generated.NextSteps) == 0 {
 		return Insight{}, fmt.Errorf("Ollama insight is missing a required field")
 	}
 	textParts := []string{generated.Headline, generated.Explanation}
