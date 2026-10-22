@@ -55,4 +55,5 @@
   <p class="muted" data-testid="no-runs">no runs yet</p>
   <button type="button" hx-get="/requests/{{.Endpoint.ID}}" hx-target="#main-panel" hx-swap="innerHTML">▶ Run</button>
   {{end}}
+  {{template "report-key" (readingKey .Login)}}
 </div>

@@ -205,6 +205,7 @@ func renderMarkdown(rd reportData) string {
 	default:
 		b.WriteString("## Insight\n\nNo insight generated.\n")
 	}
+	writeKeyMarkdown(&b, rd.Login)
 	return b.String()
 }
 

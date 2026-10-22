@@ -29,6 +29,9 @@ type endpointReportView struct {
 	Latest     *trendRowView
 	Rows       []trendRowView
 	Insight    insightFragmentData
+	// Login is the login summary of the newest listed run that used a credential pool; it only decides
+	// whether the key defines login latency.
+	Login *model.LoginSummary
 }
 
 func trendRow(r model.Run) trendRowView {
@@ -71,6 +74,9 @@ func endpointReportHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc
 		}
 		for _, run := range runs {
 			view.Rows = append(view.Rows, trendRow(run))
+			if view.Login == nil {
+				view.Login = run.Login
+			}
 		}
 		if len(view.Rows) > 0 {
 			view.Latest = &view.Rows[0]

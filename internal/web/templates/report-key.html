@@ -1,0 +1,11 @@
+{{define "report-key"}}
+<details open data-testid="reading-key" style="margin-top:1.25rem">
+  <summary><strong>How to read this</strong></summary>
+  <dl>
+  {{range .}}
+    <dt><strong>{{.Term}}</strong></dt>
+    <dd style="margin:0 0 .5rem 1rem">{{.Text}}</dd>
+  {{end}}
+  </dl>
+</details>
+{{end}}
