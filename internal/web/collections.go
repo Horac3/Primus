@@ -117,6 +117,23 @@ func restoreExamplesHandler(db *sql.DB, tmpl *template.Template) http.HandlerFun
 	}
 }
 
+// setExpandedHandler stores whether the sidebar shows a collection open. The sidebar is not
+// re-rendered: the browser already toggled the <details> element.
+func setExpandedHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := store.SetCollectionExpanded(db, r.PathValue("id"), r.FormValue("open") != "0")
+		if errors.Is(err, store.ErrNoSuchCollection) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // respondCollectionsError shows input problems in the panel (htmx does not swap 4xx responses) and
 // anything else as a 500.
 func respondCollectionsError(w http.ResponseWriter, db *sql.DB, tmpl *template.Template, err error) {

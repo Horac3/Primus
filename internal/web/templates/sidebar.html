@@ -6,8 +6,12 @@
   <button class="secondary" style="padding:.2rem .6rem"
     hx-get="/collections" hx-target="#collections-panel" hx-swap="innerHTML">Collections</button>
 </div>
-{{if .Endpoints}}
-<div>
+{{if .Groups}}
+{{range .Groups}}
+<details {{if .Collection.Expanded}}open {{end}}class="coll" data-collection="{{.Collection.ID}}"
+  hx-post="/collections/{{.Collection.ID}}/expanded" hx-trigger="toggle" hx-swap="none"
+  hx-vals='js:{open: event.target.open ? "1" : "0"}'>
+  <summary><strong>{{.Collection.Name}}</strong> <span class="muted">({{len .Endpoints}})</span></summary>
 {{range .Endpoints}}
   <button class="ep-row"
     hx-get="/requests/{{.ID}}" hx-target="#main-panel" hx-swap="innerHTML">
@@ -16,8 +20,13 @@
     <span class="spark">{{range index $.Recent .ID}}<i class="dot {{if .}}pass{{else}}fail{{end}}"></i>{{end}}</span><br>
     <span class="muted ep-path">{{.URLTemplate}}</span>
   </button>
+{{else}}
+  <p class="muted">no endpoints yet</p>
+  <button class="secondary" style="padding:.1rem .5rem"
+    hx-get="/requests/new?collection={{.Collection.ID}}" hx-target="#main-panel" hx-swap="innerHTML">+ Add endpoint</button>
 {{end}}
-</div>
+</details>
+{{end}}
 {{else}}
 <p class="muted">No endpoints yet — import a spec or add one manually.</p>
 {{end}}

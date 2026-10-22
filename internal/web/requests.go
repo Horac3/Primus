@@ -18,8 +18,14 @@ import (
 	"github.com/Horac3/Primus/internal/store"
 )
 
+// sidebarGroup is one collection and its endpoints, in name order.
+type sidebarGroup struct {
+	Collection model.Collection
+	Endpoints  []model.RequestDefinition
+}
+
 type sidebarData struct {
-	Endpoints []model.RequestDefinition
+	Groups []sidebarGroup
 	// Recent maps an endpoint ID to its latest (≤8, newest-first) run
 	// pass/fail flags — the sidebar sparkline.
 	Recent map[string][]bool
@@ -30,6 +36,24 @@ func loadSidebarData(db *sql.DB) (sidebarData, error) {
 	defs, err := store.ListRequestDefinitions(db)
 	if err != nil {
 		return sidebarData{}, fmt.Errorf("list endpoints: %w", err)
+	}
+	collections, err := store.ListCollections(db)
+	if err != nil {
+		return sidebarData{}, fmt.Errorf("list collections: %w", err)
+	}
+	sort.SliceStable(defs, func(i, j int) bool {
+		return strings.ToLower(defs[i].Name) < strings.ToLower(defs[j].Name)
+	})
+	groups := make([]sidebarGroup, 0, len(collections))
+	at := make(map[string]int, len(collections))
+	for _, c := range collections {
+		at[c.ID] = len(groups)
+		groups = append(groups, sidebarGroup{Collection: c})
+	}
+	for _, d := range defs {
+		if i, ok := at[d.CollectionID]; ok {
+			groups[i].Endpoints = append(groups[i].Endpoints, d)
+		}
 	}
 	cfgs, err := store.ListTestConfigs(db)
 	if err != nil {
@@ -61,7 +85,7 @@ func loadSidebarData(db *sql.DB) (sidebarData, error) {
 		}
 		recent[req] = flags
 	}
-	return sidebarData{Endpoints: defs, Recent: recent}, nil
+	return sidebarData{Groups: groups, Recent: recent}, nil
 }
 
 func sidebarHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
@@ -130,7 +154,9 @@ func requestPanelHandler(db *sql.DB, tmpl *template.Template, authoringEnabled b
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "new" {
-			renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(db, model.RequestDefinition{Method: "GET"}, true, authoringEnabled))
+			// ?collection= preselects the collection an empty group's add control belongs to.
+			def := model.RequestDefinition{Method: "GET", CollectionID: r.URL.Query().Get("collection")}
+			renderTemplate(w, tmpl, "endpoint-panel.html", panelDataFor(db, def, true, authoringEnabled))
 			return
 		}
 		def, err := store.GetRequestDefinition(db, id)
