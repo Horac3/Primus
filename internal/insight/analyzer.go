@@ -110,6 +110,7 @@ func (RulesAnalyzer) Analyze(ctx context.Context, summary Summary, findings []Fi
 	}
 	result.Text = strings.Join(result.Sentences, " ")
 	result.Sections.Numbers = numberLines(summary)
+	result.Sections.Comparison = comparisonLines(summary)
 	if len(result.Sections.Causes) == 0 {
 		result.Sections.Causes = []string{"Nothing in these numbers points to a problem."}
 	}

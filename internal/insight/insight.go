@@ -47,6 +47,8 @@ type Summary struct {
 	AssertionsConfigured bool            `json:"assertions_configured"`
 	Concurrency          int             `json:"concurrency"`
 	Logins               *LoginCounts    `json:"logins,omitempty"`
+	// Previous is the endpoint's earlier run, when there is one. BuildSummary never sets it; the caller does.
+	Previous *PreviousAggregates `json:"previous,omitempty"`
 
 	runDuration time.Duration
 	timeSeries  []model.Point
