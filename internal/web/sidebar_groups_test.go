@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
@@ -187,5 +188,84 @@ func TestImport_SpecWithoutOperationsCreatesEmptyCollection(t *testing.T) {
 	}
 	if c := collectionNamed(t, db, "Empty"); c.ID == "" {
 		t.Error("an operation-less spec should still give an empty collection")
+	}
+}
+
+// tableRow returns the <tr> of the collection page table that mentions needle.
+func tableRow(t *testing.T, body, needle string) string {
+	t.Helper()
+	for _, row := range strings.Split(body, "<tr")[1:] {
+		if end := strings.Index(row, "</tr>"); end >= 0 && strings.Contains(row[:end], needle) {
+			return row[:end]
+		}
+	}
+	t.Fatalf("no table row mentions %q in: %s", needle, body)
+	return ""
+}
+
+func TestCollectionPage_TableShowsLastRunPerEndpoint(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	col := seedCollection(t, db, "Shop", 2, 0)
+	started := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	for _, r := range []model.Run{
+		{ID: "run-old", TestConfigID: "cfg-Shop-epa", StartedAt: started.Add(-time.Hour), FinishedAt: started.Add(-time.Hour),
+			Outcome: model.OutcomeFail, Summary: model.RunSummary{P95Millis: 999, ErrorRate: 0.9}},
+		{ID: "run-new", TestConfigID: "cfg-Shop-epa", StartedAt: started, FinishedAt: started, Passed: true,
+			Outcome: model.OutcomePass, Summary: model.RunSummary{P95Millis: 120, ErrorRate: 0.025}},
+	} {
+		if err := store.SaveRun(db, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rr := getPath(t, mux, "/collections/"+col.ID)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET collection page = %d: %s", rr.Code, rr.Body.String())
+	}
+	ran := tableRow(t, rr.Body.String(), "Shop-epa")
+	for _, want := range []string{"PASSED", "120 ms", "2.5%", "2026-03-04 05:06", `href="/runs/run-new"`} {
+		if !strings.Contains(ran, want) {
+			t.Errorf("row of the endpoint with runs lacks %q: %s", want, ran)
+		}
+	}
+	if strings.Contains(ran, "run-old") || strings.Contains(ran, "999") {
+		t.Errorf("row shows an older run: %s", ran)
+	}
+	never := tableRow(t, rr.Body.String(), "Shop-epb")
+	if got := strings.Count(never, "<td>-</td>"); got != 5 || strings.Contains(never, "/runs/") {
+		t.Errorf("never-run endpoint should show - in 5 columns and no link (got %d): %s", got, never)
+	}
+}
+
+func TestCollectionPage_UnknownCollectionIs404(t *testing.T) {
+	mux := web.NewServer(newTestDB(t))
+	if rr := getPath(t, mux, "/collections/nope"); rr.Code != http.StatusNotFound {
+		t.Errorf("status %d, want 404", rr.Code)
+	}
+}
+
+func TestCollectionPage_EmptyCollectionSaysSo(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	col, _ := store.CreateCollection(db, "Nothing", "")
+
+	body := getPath(t, mux, "/collections/"+col.ID).Body.String()
+
+	if !strings.Contains(body, "no endpoints yet") {
+		t.Errorf("empty collection page: %s", body)
+	}
+}
+
+func TestSidebar_GroupLinksToCollectionPage(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	col := seedCollection(t, db, "Linked", 1, 0)
+
+	g := sidebarGroup(t, getPath(t, mux, "/sidebar-fragment").Body.String(), col.ID)
+
+	if !strings.Contains(g, `hx-get="/collections/`+col.ID+`"`) {
+		t.Errorf("group has no link to the collection page: %s", g)
 	}
 }

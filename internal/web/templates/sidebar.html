@@ -12,6 +12,10 @@
   hx-post="/collections/{{.Collection.ID}}/expanded" hx-trigger="toggle" hx-swap="none"
   hx-vals='js:{open: event.target.open ? "1" : "0"}'>
   <summary><strong>{{.Collection.Name}}</strong> <span class="muted">({{len .Endpoints}})</span></summary>
+  <div style="margin:.2rem 0 .4rem">
+    <button class="secondary" style="padding:.1rem .5rem"
+      hx-get="/collections/{{.Collection.ID}}" hx-target="#main-panel" hx-swap="innerHTML">Overview</button>
+  </div>
 {{range .Endpoints}}
   <button class="ep-row"
     hx-get="/requests/{{.ID}}" hx-target="#main-panel" hx-swap="innerHTML">
