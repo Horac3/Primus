@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -668,6 +669,43 @@ func TestLatestRunsByRequest_NewestPerRequest(t *testing.T) {
 	}
 	if _, ok := got["never"]; ok {
 		t.Fatal("never-run endpoint must be absent")
+	}
+}
+
+func TestRecentRunsByRequest_NewestFirstCappedAndScoped(t *testing.T) {
+	db := migrated(t)
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []model.TestConfig{{ID: "c1", RequestID: "r1"}, {ID: "c2", RequestID: "r1"}, {ID: "c3", RequestID: "r2"}} {
+		if err := store.SaveTestConfig(db, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Runs of r1 are spread over two configs; r2's run must never appear.
+	for i, cfg := range []string{"c1", "c2", "c1", "c2"} {
+		at := t0.Add(time.Duration(i) * time.Hour)
+		if err := store.SaveRun(db, model.Run{ID: fmt.Sprintf("r1-%d", i), TestConfigID: cfg, StartedAt: at, FinishedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SaveRun(db, model.Run{ID: "r2-0", TestConfigID: "c3", StartedAt: t0.Add(9 * time.Hour), FinishedAt: t0.Add(9 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.RecentRunsByRequest(db, "r1", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	if want := []string{"r1-3", "r1-2", "r1-1"}; !slices.Equal(ids, want) {
+		t.Fatalf("got %v, want %v", ids, want)
+	}
+
+	none, err := store.RecentRunsByRequest(db, "never", 10)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("never-run endpoint: got %v, %v", none, err)
 	}
 }
 

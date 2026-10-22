@@ -389,6 +389,38 @@ func LatestRunsByRequest(db *sql.DB, requestIDs []string) (map[string]model.Run,
 	return out, rows.Err()
 }
 
+// RecentRunsByRequest returns up to limit runs of one endpoint across all its test configs, newest first.
+func RecentRunsByRequest(db *sql.DB, requestID string, limit int) ([]model.Run, error) {
+	rows, err := db.Query(`SELECT r.payload FROM runs r JOIN test_configs c ON c.id = r.test_config_id
+		WHERE c.request_id = ? ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?`, requestID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("RecentRunsByRequest: %w", err)
+	}
+	var payloads []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		payloads = append(payloads, p)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.Run, 0, len(payloads))
+	for _, p := range payloads {
+		var r model.Run
+		if err := json.Unmarshal([]byte(p), &r); err != nil {
+			return nil, fmt.Errorf("unmarshal Run: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // ListRuns returns all Runs for a given TestConfig ID.
 func ListRuns(db *sql.DB, testConfigID string) ([]model.Run, error) {
 	rows, err := db.Query(`SELECT payload FROM runs WHERE test_config_id = ?`, testConfigID)
