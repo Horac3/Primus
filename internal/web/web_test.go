@@ -1299,8 +1299,8 @@ func TestImportHandler_URLSpec_RefreshesSidebarAndLoadsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRequestDefinitions: %v", err)
 	}
-	if len(defs) != 1 || defs[0].ID != "listPets" {
-		t.Errorf("stored defs = %+v, want [listPets]", defs)
+	if len(defs) != 1 || defs[0].Name != "listPets" {
+		t.Errorf("stored defs = %+v, want one endpoint named listPets", defs)
 	}
 }
 
