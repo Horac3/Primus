@@ -14,7 +14,9 @@ that collection already chosen.
 
 **Overview** opens the collection page: a table with one row per endpoint showing the
 verdict, p95, error rate and start time (UTC) of its latest run, and a link to that
-run's report. An endpoint that has never run shows `-` in every column.
+run's report. An endpoint that has never run shows `-` in every column. Beside each
+endpoint name, **endpoint report** opens that endpoint's report: its latest run, a table
+of its last 10 runs and the findings (see [reports](reports.md#per-endpoint-report)).
 
 ## Run all
 
