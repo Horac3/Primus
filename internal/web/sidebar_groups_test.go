@@ -269,3 +269,19 @@ func TestSidebar_GroupLinksToCollectionPage(t *testing.T) {
 		t.Errorf("group has no link to the collection page: %s", g)
 	}
 }
+
+func TestSidebar_ToggleOnlyPostsWhenStateChangesAndDoesNotLeakToChildren(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	col := seedCollection(t, db, "Alpha", 1, 0)
+
+	g := sidebarGroup(t, getPath(t, mux, "/sidebar-fragment").Body.String(), col.ID)
+
+	// Browsers fire toggle when they render <details open>; the filter keeps that from posting.
+	if !strings.Contains(g, `hx-trigger="toggle[event.target.open !== true]"`) {
+		t.Errorf("toggle is not filtered against the rendered state: %s", g)
+	}
+	if !strings.Contains(g, `hx-disinherit="*"`) {
+		t.Errorf("hx-vals would be inherited by the buttons inside: %s", g)
+	}
+}

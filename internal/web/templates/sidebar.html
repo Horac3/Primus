@@ -9,7 +9,7 @@
 {{if .Groups}}
 {{range .Groups}}
 <details {{if .Collection.Expanded}}open {{end}}class="coll" data-collection="{{.Collection.ID}}"
-  hx-post="/collections/{{.Collection.ID}}/expanded" hx-trigger="toggle" hx-swap="none"
+  hx-post="/collections/{{.Collection.ID}}/expanded" hx-trigger="toggle[event.target.open !== {{.Collection.Expanded}}]" hx-swap="none" hx-disinherit="*"
   hx-vals='js:{open: event.target.open ? "1" : "0"}'>
   <summary><strong>{{.Collection.Name}}</strong> <span class="muted">({{len .Endpoints}})</span></summary>
   <div style="margin:.2rem 0 .4rem">
