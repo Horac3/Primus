@@ -87,76 +87,116 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *s
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if len(cfg.PayloadPool) > 0 {
-			if def.Body == nil {
-				http.Error(w, "payload_pool requires a JSON body template", http.StatusBadRequest)
-				return
-			}
-			if err := author.ValidatePayloads(def.Body.Raw, cfg.PayloadPool, len(cfg.PayloadPool)); err != nil {
-				http.Error(w, "invalid payload_pool: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		if err := engine.ValidateTestConfig(cfg); err != nil {
-			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		// An active credential pool overrides global auth for the run,
-		// unless auth_source says not to use one.
-		var pool *model.CredentialPool
-		if cfg.AuthSource.UsesPool() {
-			if pool, err = activeRunPool(db); err != nil {
-				http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		auth, err := store.GetGlobalAuth(db)
+		started, err := startConfiguredRun(r.Context(), db, reg, def, resolved, cfg, true)
 		if err != nil {
-			http.Error(w, "load auth: "+err.Error(), http.StatusInternalServerError)
+			writeStartError(w, err)
 			return
 		}
-		// auth_source may swap the active pool for global auth or no auth.
-		auth, pool, err = engine.ResolveAuth(cfg, auth, pool)
-		if err != nil {
-			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		detail := fmt.Sprintf("%s · concurrency %d", cfg.Mode, cfg.Concurrency)
-		switch {
-		case pool != nil:
-			cfg.CredentialPoolID = pool.ID
-			if err := engine.ValidatePool(cfg, *pool); err != nil {
-				http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			detail += " · logging in as pool " + pool.Name
-		case auth.Type == "" || auth.Type == model.AuthTypeNone:
-			detail += " · no auth"
-		default:
-			detail += " · global auth"
-		}
-		if err := store.SaveTestConfig(db, cfg); err != nil {
-			http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// One id for the registry entry, the poll URL, and the persisted run.
-		runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
-		h := &runHandle{done: make(chan struct{}), detail: detail, requestID: def.ID}
-		reg.startWithHandle(r.Context(), runID, h, func(ctx context.Context, h *runHandle) (model.Run, error) {
-			run, err := engine.RunWithPool(ctx, resolved, cfg, auth, pool, &h.snapshot)
-			if err != nil {
-				return model.Run{}, err
-			}
-			run.ID = runID
-			return run, nil
-		})
 		// The run is registered, so a delete now sees it. Write the response without holding the guard.
 		unlock()
 
+		runID, detail := started.ID, started.Detail
 		w.WriteHeader(http.StatusAccepted)
 		renderTemplate(w, tmpl, "running.html", runningData{RunID: runID, Detail: detail})
 	}
+}
+
+// startError carries the HTTP status and message for a run that could not start.
+type startError struct {
+	Status int
+	Msg    string
+}
+
+func (e *startError) Error() string { return e.Msg }
+
+func writeStartError(w http.ResponseWriter, err error) {
+	var se *startError
+	if errors.As(err, &se) {
+		http.Error(w, se.Msg, se.Status)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+// startedRun identifies a run registered in the registry; Handle lets a caller wait for it.
+type startedRun struct {
+	ID     string
+	Detail string
+	Handle *runHandle
+}
+
+// startConfiguredRun validates cfg against def, resolves auth and the credential pool, optionally
+// saves cfg, and registers the run. def is the stored definition (the {{base_url}} template) and
+// resolved the copy the run sends. The caller holds guard.mu until this returns, so a delete of the
+// scope cannot slip in before the run is registered. Failures are *startError.
+func startConfiguredRun(parent context.Context, db *sql.DB, reg *Registry, def, resolved model.RequestDefinition,
+	cfg model.TestConfig, saveConfig bool) (startedRun, error) {
+	bad := func(format string, a ...any) error {
+		return &startError{Status: http.StatusBadRequest, Msg: fmt.Sprintf(format, a...)}
+	}
+	internal := func(format string, a ...any) error {
+		return &startError{Status: http.StatusInternalServerError, Msg: fmt.Sprintf(format, a...)}
+	}
+	if len(cfg.PayloadPool) > 0 {
+		if def.Body == nil {
+			return startedRun{}, bad("payload_pool requires a JSON body template")
+		}
+		if err := author.ValidatePayloads(def.Body.Raw, cfg.PayloadPool, len(cfg.PayloadPool)); err != nil {
+			return startedRun{}, bad("invalid payload_pool: %v", err)
+		}
+	}
+	if err := engine.ValidateTestConfig(cfg); err != nil {
+		return startedRun{}, bad("invalid config: %v", err)
+	}
+	// An active credential pool overrides global auth for the run,
+	// unless auth_source says not to use one.
+	var pool *model.CredentialPool
+	var err error
+	if cfg.AuthSource.UsesPool() {
+		if pool, err = activeRunPool(db); err != nil {
+			return startedRun{}, bad("invalid config: %v", err)
+		}
+	}
+	auth, err := store.GetGlobalAuth(db)
+	if err != nil {
+		return startedRun{}, internal("load auth: %v", err)
+	}
+	// auth_source may swap the active pool for global auth or no auth.
+	auth, pool, err = engine.ResolveAuth(cfg, auth, pool)
+	if err != nil {
+		return startedRun{}, bad("invalid config: %v", err)
+	}
+	detail := fmt.Sprintf("%s · concurrency %d", cfg.Mode, cfg.Concurrency)
+	switch {
+	case pool != nil:
+		cfg.CredentialPoolID = pool.ID
+		if err := engine.ValidatePool(cfg, *pool); err != nil {
+			return startedRun{}, bad("invalid config: %v", err)
+		}
+		detail += " · logging in as pool " + pool.Name
+	case auth.Type == "" || auth.Type == model.AuthTypeNone:
+		detail += " · no auth"
+	default:
+		detail += " · global auth"
+	}
+	if saveConfig {
+		if err := store.SaveTestConfig(db, cfg); err != nil {
+			return startedRun{}, internal("save config: %v", err)
+		}
+	}
+
+	// One id for the registry entry, the poll URL, and the persisted run.
+	runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
+	h := &runHandle{done: make(chan struct{}), detail: detail, requestID: def.ID}
+	reg.startWithHandle(parent, runID, h, func(ctx context.Context, h *runHandle) (model.Run, error) {
+		run, err := engine.RunWithPool(ctx, resolved, cfg, auth, pool, &h.snapshot)
+		if err != nil {
+			return model.Run{}, err
+		}
+		run.ID = runID
+		return run, nil
+	})
+	return startedRun{ID: runID, Detail: detail, Handle: h}, nil
 }
 
 func runStatusHandler(db *sql.DB, tmpl *template.Template, reg *Registry, analyzer insight.Analyzer) http.HandlerFunc {
