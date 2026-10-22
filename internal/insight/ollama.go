@@ -143,11 +143,19 @@ func (a OllamaAnalyzer) Analyze(ctx context.Context, summary Summary, findings [
 		return Insight{}, err
 	}
 	return Insight{
-		Text:         text,
-		Sentences:    textParts,
-		Headline:     generated.Headline,
-		Explanation:  generated.Explanation,
-		NextSteps:    generated.NextSteps,
+		Text:        text,
+		Sentences:   textParts,
+		Headline:    generated.Headline,
+		Explanation: generated.Explanation,
+		NextSteps:   generated.NextSteps,
+		// The model's headline states the numbers, its explanation the likely causes. The comparison is
+		// written by code so it cannot misquote either run (FR-INS-03).
+		Sections: Sections{
+			Numbers:    []string{generated.Headline},
+			Causes:     []string{generated.Explanation},
+			NextSteps:  generated.NextSteps,
+			Comparison: comparisonLines(summary),
+		},
 		AnalyzerName: a.Name(),
 		ModelName:    a.ModelName(),
 		CreatedAt:    time.Now().UTC(),
