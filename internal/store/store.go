@@ -118,7 +118,25 @@ func Migrate(db *sql.DB) error {
 	if err := migrateCollections(db); err != nil {
 		return err
 	}
+	if err := migrateInsightSections(db); err != nil {
+		return err
+	}
 	return migrateMaskedFields(db)
+}
+
+// migrateInsightSections adds the sections column to an insights table created before insights had sections.
+func migrateInsightSections(db *sql.DB) error {
+	has, err := columnExists(db, "insights", "sections")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE insights ADD COLUMN sections TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate insights: add sections: %w", err)
+	}
+	return nil
 }
 
 // SaveRequestDefinition inserts or replaces a RequestDefinition. An empty CollectionID files the
@@ -421,6 +439,51 @@ func RecentRunsByRequest(db *sql.DB, requestID string, limit int) ([]model.Run, 
 	return out, nil
 }
 
+// previousRunScan is how many earlier runs PreviousRunOfEndpoint looks through for one that completed requests.
+const previousRunScan = 20
+
+// PreviousRunOfEndpoint returns the newest run of the same endpoint (across its test configs) that started
+// before the given run and completed at least one request. It returns nil, nil when there is none. An unknown
+// run is an error, so a caller cannot mistake a missing run for a first run.
+func PreviousRunOfEndpoint(db *sql.DB, runID string) (*model.Run, error) {
+	var requestID, startedAt string
+	err := db.QueryRow(`SELECT c.request_id, r.started_at FROM runs r JOIN test_configs c ON c.id = r.test_config_id
+		WHERE r.id = ?`, runID).Scan(&requestID, &startedAt)
+	if err != nil {
+		return nil, fmt.Errorf("PreviousRunOfEndpoint %q: %w", runID, err)
+	}
+	rows, err := db.Query(`SELECT r.payload FROM runs r JOIN test_configs c ON c.id = r.test_config_id
+		WHERE c.request_id = ? AND r.id != ? AND r.started_at < ?
+		ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?`, requestID, runID, startedAt, previousRunScan)
+	if err != nil {
+		return nil, fmt.Errorf("PreviousRunOfEndpoint %q: %w", runID, err)
+	}
+	var payloads []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		payloads = append(payloads, p)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range payloads {
+		var r model.Run
+		if err := json.Unmarshal([]byte(p), &r); err != nil {
+			return nil, fmt.Errorf("unmarshal Run: %w", err)
+		}
+		if r.Summary.TotalRequests > 0 {
+			return &r, nil
+		}
+	}
+	return nil, nil
+}
+
 // ListRuns returns all Runs for a given TestConfig ID.
 func ListRuns(db *sql.DB, testConfigID string) ([]model.Run, error) {
 	rows, err := db.Query(`SELECT payload FROM runs WHERE test_config_id = ?`, testConfigID)
@@ -450,12 +513,14 @@ const (
 )
 
 type InsightRecord struct {
-	RunID     string
-	Analyzer  string
-	Model     string
-	Status    string
-	Text      string
-	Error     string
+	RunID    string
+	Analyzer string
+	Model    string
+	Status   string
+	Text     string
+	Error    string
+	// Sections is the insight's fixed sections as JSON; empty for insights written before they existed.
+	Sections  string
 	CreatedAt time.Time
 }
 
@@ -471,6 +536,7 @@ func StartInsight(db *sql.DB, runID, analyzer, modelName string) (InsightRecord,
 			 model = excluded.model,
 			 status = 'pending',
 			 text = '',
+			 sections = '',
 			 error = '',
 			 created_at = excluded.created_at
 		 WHERE insights.status != 'pending'`,
@@ -491,8 +557,8 @@ func GetInsight(db *sql.DB, runID string) (InsightRecord, error) {
 	var record InsightRecord
 	var createdAt string
 	err := db.QueryRow(
-		`SELECT run_id, analyzer, model, status, text, error, created_at FROM insights WHERE run_id = ?`, runID,
-	).Scan(&record.RunID, &record.Analyzer, &record.Model, &record.Status, &record.Text, &record.Error, &createdAt)
+		`SELECT run_id, analyzer, model, status, text, sections, error, created_at FROM insights WHERE run_id = ?`, runID,
+	).Scan(&record.RunID, &record.Analyzer, &record.Model, &record.Status, &record.Text, &record.Sections, &record.Error, &createdAt)
 	if err != nil {
 		return InsightRecord{}, fmt.Errorf("GetInsight %q: %w", runID, err)
 	}
@@ -504,16 +570,21 @@ func GetInsight(db *sql.DB, runID string) (InsightRecord, error) {
 }
 
 func CompleteInsight(db *sql.DB, runID, analyzer, modelName, text string) error {
+	return CompleteInsightSections(db, runID, analyzer, modelName, text, "")
+}
+
+// CompleteInsightSections finishes a pending insight with its fixed sections (JSON) beside the plain text.
+func CompleteInsightSections(db *sql.DB, runID, analyzer, modelName, text, sections string) error {
 	result, err := db.Exec(
-		`UPDATE insights SET analyzer = ?, model = ?, status = 'done', text = ?, error = '' WHERE run_id = ? AND status = 'pending'`,
-		analyzer, modelName, text, runID,
+		`UPDATE insights SET analyzer = ?, model = ?, status = 'done', text = ?, sections = ?, error = '' WHERE run_id = ? AND status = 'pending'`,
+		analyzer, modelName, text, sections, runID,
 	)
 	return requireInsightUpdate(result, err, runID, "complete")
 }
 
 func FailInsight(db *sql.DB, runID, analyzer, modelName, cause string) error {
 	result, err := db.Exec(
-		`UPDATE insights SET analyzer = ?, model = ?, status = 'failed', text = '', error = ? WHERE run_id = ? AND status = 'pending'`,
+		`UPDATE insights SET analyzer = ?, model = ?, status = 'failed', text = '', sections = '', error = ? WHERE run_id = ? AND status = 'pending'`,
 		analyzer, modelName, cause, runID,
 	)
 	return requireInsightUpdate(result, err, runID, "fail")
