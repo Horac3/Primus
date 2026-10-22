@@ -15,9 +15,20 @@ type Insight struct {
 	Headline     string    `json:"headline,omitempty"`
 	Explanation  string    `json:"explanation,omitempty"`
 	NextSteps    []string  `json:"next_steps,omitempty"`
+	Sections     Sections  `json:"sections"`
 	AnalyzerName string    `json:"analyzer_name"`
 	ModelName    string    `json:"model_name"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// Sections is the fixed shape every insight takes, whichever analyzer wrote it (FR-INS-01).
+// Comparison is empty unless the endpoint has an earlier run (FR-INS-03).
+type Sections struct {
+	Numbers      []string `json:"numbers"`
+	Causes       []string `json:"causes"`
+	NextSteps    []string `json:"next_steps"`
+	Comparison   []string `json:"comparison,omitempty"`
+	FallbackFrom string   `json:"fallback_from,omitempty"`
 }
 
 type Analyzer interface {
@@ -42,11 +53,20 @@ var sentenceTemplates = map[string]string{
 	"PARTIAL_LAST_BUCKET":          "The final time-series bucket covered {{.bucket_duration_ms}} ms instead of a full {{.bucket_width_ms}} ms.",
 }
 
+// nextStepTemplates maps a finding code to the one step worth trying first. Codes without an entry add none.
+var nextStepTemplates = map[string]string{
+	"LOGIN_FAILURES":               "Check the credentials in the pool and the login endpoint, then run again.",
+	"CLIENT_TIMEOUT":               "Raise the request timeout, or check whether the server is hanging or overloaded.",
+	"SATURATION_FROM_START":        "Lower the concurrency and run again to find where latency starts to climb.",
+	"CONCURRENCY_EXCEEDS_CAPACITY": "Raise the concurrency, or treat the measured latency as a lower bound.",
+	"NO_ASSERTIONS":                "Add an assertion on status or latency so the run has a pass/fail verdict.",
+}
+
 func (RulesAnalyzer) Name() string { return "rules" }
 
 func (RulesAnalyzer) ModelName() string { return "rules-v1" }
 
-func (RulesAnalyzer) Analyze(ctx context.Context, _ Summary, findings []Finding) (Insight, error) {
+func (RulesAnalyzer) Analyze(ctx context.Context, summary Summary, findings []Finding) (Insight, error) {
 	if err := ctx.Err(); err != nil {
 		return Insight{}, err
 	}
@@ -77,13 +97,46 @@ func (RulesAnalyzer) Analyze(ctx context.Context, _ Summary, findings []Finding)
 				}
 				text = rendered.String()
 			}
+			if step, ok := nextStepTemplates[finding.Code]; ok {
+				result.Sections.NextSteps = append(result.Sections.NextSteps, step)
+			}
 			if text != "" {
 				result.Sentences = append(result.Sentences, text)
+				if finding.Severity != SeverityInfo {
+					result.Sections.Causes = append(result.Sections.Causes, text)
+				}
 			}
 		}
 	}
 	result.Text = strings.Join(result.Sentences, " ")
+	result.Sections.Numbers = numberLines(summary)
+	if len(result.Sections.Causes) == 0 {
+		result.Sections.Causes = []string{"Nothing in these numbers points to a problem."}
+	}
+	if len(result.Sections.NextSteps) == 0 {
+		result.Sections.NextSteps = []string{"Re-run after your next change and compare the percentiles and error rate."}
+	}
 	return result, nil
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// numberLines is the "What the numbers say" section of the rules analyzer: aggregates only.
+func numberLines(s Summary) []string {
+	lines := []string{
+		fmt.Sprintf("%s completed, %.1f requests per second.", plural(s.RequestCount, "request", "requests"), s.RequestsPerSecond),
+		fmt.Sprintf("Latency: p50 %d ms, p95 %d ms, p99 %d ms.", s.P50Millis, s.P95Millis, s.P99Millis),
+		fmt.Sprintf("%s (%.1f%% of requests).", plural(s.ErrorCount, "error", "errors"), s.ErrorRate*100),
+	}
+	if s.Logins != nil {
+		lines = append(lines, fmt.Sprintf("%d of %d logins succeeded.", s.Logins.Succeeded, s.Logins.Attempted))
+	}
+	return lines
 }
 
 func LoadConfig() (Config, error) {
