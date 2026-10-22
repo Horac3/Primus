@@ -12,6 +12,7 @@
     <p><span class="{{outcomeClass .Latest.Run.Outcome}}">{{.Latest.Verdict}}</span>
        <span class="muted">{{.Latest.Started}} UTC</span>
        <a href="/runs/{{.Latest.Run.ID}}">full run</a></p>
+    <div style="overflow-x:auto">
     <table>
       <tr><th>Requests</th><td>{{.Latest.Run.Summary.TotalRequests}}</td>
           <th>Throughput</th><td>{{requestsPerSec .Latest.Run}} req/s</td></tr>
@@ -21,6 +22,7 @@
           <th>Cancelled</th><td>{{.Latest.Run.Summary.Cancelled}}</td></tr>
       <tr><th>p99</th><td>{{.Latest.Run.Summary.P99Millis}} ms</td><th></th><td></td></tr>
     </table>
+    </div>
   </section>
 
   <section data-testid="trend">
