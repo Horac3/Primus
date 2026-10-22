@@ -154,3 +154,34 @@ func TestEndpointReport_FindingsShowTheLatestRunsInsightOnly(t *testing.T) {
 		t.Errorf("report shows an older run's finding: %s", body)
 	}
 }
+
+func TestEndpointReport_HeaderLeaksNoUserinfoQueryOrFragment(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	col, err := store.CreateCollection(db, "Shop", "http://base.test/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, tmpl := range map[string]string{
+		"direct":  "http://u:hunter2@x.test/orders?token=URLSECRET#frag",
+		"viabase": "{{base_url}}/orders?token=URLSECRET#frag",
+	} {
+		def := model.RequestDefinition{ID: id, Name: id, Method: "GET", URLTemplate: tmpl, CollectionID: col.ID}
+		if err := store.SaveRequestDefinition(db, def); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for id, want := range map[string]string{"direct": "http://x.test/orders", "viabase": "http://base.test/api/orders"} {
+		body := getPath(t, mux, "/requests/"+id+"/report").Body.String()
+
+		if !strings.Contains(body, want) {
+			t.Errorf("report of %s lacks the cleaned URL %q: %s", id, want, body)
+		}
+		for _, secret := range []string{"hunter2", "u:", "URLSECRET", "token=", "#frag"} {
+			if strings.Contains(body, secret) {
+				t.Errorf("report of %s leaks %q: %s", id, secret, body)
+			}
+		}
+	}
+}
