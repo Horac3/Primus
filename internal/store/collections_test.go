@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
@@ -517,4 +518,116 @@ func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+func TestListRequestDefinitionsByCollection_OnlyThatCollectionByName(t *testing.T) {
+	db := migrated(t)
+	a, _ := store.CreateCollection(db, "A", "")
+	b, _ := store.CreateCollection(db, "B", "")
+	for _, d := range []model.RequestDefinition{
+		{ID: "a2", Name: "zeta", Method: "GET", URLTemplate: "http://x", CollectionID: a.ID},
+		{ID: "a1", Name: "alpha", Method: "GET", URLTemplate: "http://x", CollectionID: a.ID},
+		{ID: "b1", Name: "other", Method: "GET", URLTemplate: "http://x", CollectionID: b.ID},
+	} {
+		if err := store.SaveRequestDefinition(db, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.ListRequestDefinitionsByCollection(db, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "a1" || got[1].ID != "a2" || got[0].CollectionID != a.ID {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestLatestTestConfig_NewestSavedWins(t *testing.T) {
+	db := migrated(t)
+	if _, err := store.LatestTestConfig(db, "r1"); !errors.Is(err, store.ErrNoSuchConfig) {
+		t.Fatalf("want ErrNoSuchConfig, got %v", err)
+	}
+	for _, id := range []string{"c1", "c2", "c3"} {
+		if err := store.SaveTestConfig(db, model.TestConfig{ID: id, RequestID: "r1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SaveTestConfig(db, model.TestConfig{ID: "x", RequestID: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	// Re-saving an older config makes it the newest.
+	if err := store.SaveTestConfig(db, model.TestConfig{ID: "c1", RequestID: "r1"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LatestTestConfig(db, "r1")
+	if err != nil || got.ID != "c1" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestLatestRunsByRequest_NewestPerRequest(t *testing.T) {
+	db := migrated(t)
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []model.TestConfig{{ID: "c1", RequestID: "r1"}, {ID: "c2", RequestID: "r1"}, {ID: "c3", RequestID: "r2"}} {
+		if err := store.SaveTestConfig(db, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range []model.Run{
+		{ID: "old", TestConfigID: "c1", StartedAt: t0, FinishedAt: t0},
+		{ID: "new", TestConfigID: "c2", StartedAt: t0.Add(time.Hour), FinishedAt: t0.Add(time.Hour)},
+		{ID: "r2run", TestConfigID: "c3", StartedAt: t0, FinishedAt: t0},
+	} {
+		if err := store.SaveRun(db, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.LatestRunsByRequest(db, []string{"r1", "r2", "never"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["r1"].ID != "new" || got["r2"].ID != "r2run" {
+		t.Fatalf("got %+v", got)
+	}
+	if _, ok := got["never"]; ok {
+		t.Fatal("never-run endpoint must be absent")
+	}
+}
+
+func TestCreateCollectionUnique_AddsNumericSuffix(t *testing.T) {
+	db := migrated(t)
+	var names []string
+	for i := 0; i < 3; i++ {
+		c, err := store.CreateCollectionUnique(db, "Pets", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, c.Name)
+	}
+	if names[0] != "Pets" || names[1] != "Pets 2" || names[2] != "Pets 3" {
+		t.Fatalf("got %v", names)
+	}
+}
+
+func TestSetCollectionExpanded_PersistsAndDefaultsOpen(t *testing.T) {
+	db := migrated(t)
+	c, _ := store.CreateCollection(db, "A", "")
+	got, _ := store.GetCollection(db, c.ID)
+	if !got.Expanded {
+		t.Fatal("new collection should default to expanded")
+	}
+	if err := store.SetCollectionExpanded(db, c.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = store.GetCollection(db, c.ID)
+	if got.Expanded {
+		t.Fatal("expected collapsed")
+	}
+	cols, _ := store.ListCollections(db)
+	if len(cols) != 1 || cols[0].Expanded {
+		t.Fatalf("list should carry the flag: %+v", cols)
+	}
+	if err := store.SetCollectionExpanded(db, "nope", true); !errors.Is(err, store.ErrNoSuchCollection) {
+		t.Fatalf("want ErrNoSuchCollection, got %v", err)
+	}
 }

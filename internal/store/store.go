@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -172,6 +173,29 @@ func ListRequestDefinitions(db *sql.DB) ([]model.RequestDefinition, error) {
 	return out, rows.Err()
 }
 
+// ListRequestDefinitionsByCollection returns one collection's endpoints ordered by name.
+func ListRequestDefinitionsByCollection(db *sql.DB, collectionID string) ([]model.RequestDefinition, error) {
+	rows, err := db.Query(`SELECT payload, collection_id FROM requests WHERE collection_id = ? ORDER BY name COLLATE NOCASE, id`, collectionID)
+	if err != nil {
+		return nil, fmt.Errorf("ListRequestDefinitionsByCollection: %w", err)
+	}
+	defer rows.Close()
+	var out []model.RequestDefinition
+	for rows.Next() {
+		var payload, cid string
+		if err := rows.Scan(&payload, &cid); err != nil {
+			return nil, err
+		}
+		var r model.RequestDefinition
+		if err := json.Unmarshal([]byte(payload), &r); err != nil {
+			return nil, err
+		}
+		r.CollectionID = cid
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // SaveGlobalAuth inserts or replaces the single global auth row (id=1).
 func SaveGlobalAuth(db *sql.DB, a model.AuthConfig) error {
 	_, err := db.Exec(
@@ -220,6 +244,27 @@ func GetTestConfig(db *sql.DB, id string) (model.TestConfig, error) {
 	var payload string
 	if err := row.Scan(&payload); err != nil {
 		return model.TestConfig{}, fmt.Errorf("GetTestConfig %q: %w", id, err)
+	}
+	var c model.TestConfig
+	if err := json.Unmarshal([]byte(payload), &c); err != nil {
+		return model.TestConfig{}, fmt.Errorf("unmarshal TestConfig: %w", err)
+	}
+	return c, nil
+}
+
+// ErrNoSuchConfig means an endpoint has no saved test config.
+var ErrNoSuchConfig = errors.New("no saved test config")
+
+// LatestTestConfig returns the most recently saved config of an endpoint. Saving a config again
+// (INSERT OR REPLACE) gives its row a new rowid, so the highest rowid is the newest.
+func LatestTestConfig(db *sql.DB, requestID string) (model.TestConfig, error) {
+	var payload string
+	err := db.QueryRow(`SELECT payload FROM test_configs WHERE request_id = ? ORDER BY rowid DESC LIMIT 1`, requestID).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.TestConfig{}, fmt.Errorf("LatestTestConfig %q: %w", requestID, ErrNoSuchConfig)
+	}
+	if err != nil {
+		return model.TestConfig{}, fmt.Errorf("LatestTestConfig %q: %w", requestID, err)
 	}
 	var c model.TestConfig
 	if err := json.Unmarshal([]byte(payload), &c); err != nil {
@@ -298,6 +343,41 @@ func ListAllRuns(db *sql.DB) ([]model.Run, error) {
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// LatestRunsByRequest returns the newest run of each given endpoint, keyed by request ID.
+// Endpoints that never ran are absent from the map.
+func LatestRunsByRequest(db *sql.DB, requestIDs []string) (map[string]model.Run, error) {
+	out := map[string]model.Run{}
+	if len(requestIDs) == 0 {
+		return out, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(requestIDs)), ",")
+	args := make([]any, len(requestIDs))
+	for i, id := range requestIDs {
+		args[i] = id
+	}
+	rows, err := db.Query(`SELECT c.request_id, r.payload FROM runs r JOIN test_configs c ON c.id = r.test_config_id
+		WHERE c.request_id IN (`+ph+`) ORDER BY r.started_at DESC, r.rowid DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("LatestRunsByRequest: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var reqID, payload string
+		if err := rows.Scan(&reqID, &payload); err != nil {
+			return nil, err
+		}
+		if _, seen := out[reqID]; seen {
+			continue
+		}
+		var r model.Run
+		if err := json.Unmarshal([]byte(payload), &r); err != nil {
+			return nil, err
+		}
+		out[reqID] = r
 	}
 	return out, rows.Err()
 }

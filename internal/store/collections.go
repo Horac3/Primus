@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -29,6 +31,15 @@ func migrateCollections(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE requests ADD COLUMN collection_id TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("migrate collections: add column: %w", err)
+		}
+	}
+	hasExp, err := columnExists(db, "collections", "expanded")
+	if err != nil {
+		return err
+	}
+	if !hasExp {
+		if _, err := db.Exec(`ALTER TABLE collections ADD COLUMN expanded INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return fmt.Errorf("migrate collections: add expanded: %w", err)
 		}
 	}
 	var orphans int
@@ -88,7 +99,7 @@ func ensureDefaultCollection(db *sql.DB) (string, error) {
 
 // ListCollections returns all collections ordered by name.
 func ListCollections(db *sql.DB) ([]model.Collection, error) {
-	rows, err := db.Query(`SELECT id, name, base_url, seed_id, seed_version FROM collections ORDER BY name COLLATE NOCASE`)
+	rows, err := db.Query(`SELECT id, name, base_url, seed_id, seed_version, expanded FROM collections ORDER BY name COLLATE NOCASE`)
 	if err != nil {
 		return nil, fmt.Errorf("ListCollections: %w", err)
 	}
@@ -96,7 +107,7 @@ func ListCollections(db *sql.DB) ([]model.Collection, error) {
 	var out []model.Collection
 	for rows.Next() {
 		var c model.Collection
-		if err := rows.Scan(&c.ID, &c.Name, &c.BaseURL, &c.SeedID, &c.SeedVersion); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.BaseURL, &c.SeedID, &c.SeedVersion, &c.Expanded); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -133,6 +144,14 @@ func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
+// newCollectionID is time-ordered but carries random bytes: the Windows clock is coarse enough for
+// two creates in a row to share a nanosecond value, and an ID clash must not look like a name clash.
+func newCollectionID() string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("col-%d-%s", time.Now().UnixNano(), hex.EncodeToString(b[:]))
+}
+
 // CreateCollection adds a user collection. The name is trimmed and unique ignoring case; baseURL is
 // empty or an absolute http(s) URL.
 func CreateCollection(db *sql.DB, name, baseURL string) (model.Collection, error) {
@@ -140,7 +159,7 @@ func CreateCollection(db *sql.DB, name, baseURL string) (model.Collection, error
 	if err != nil {
 		return model.Collection{}, err
 	}
-	c := model.Collection{ID: fmt.Sprintf("col-%d", time.Now().UnixNano()), Name: name, BaseURL: baseURL}
+	c := model.Collection{ID: newCollectionID(), Name: name, BaseURL: baseURL, Expanded: true}
 	_, err = db.Exec(`INSERT INTO collections (id, name, base_url, created_at) VALUES (?,?,?,?)`,
 		c.ID, c.Name, c.BaseURL, time.Now().UTC().Format(time.RFC3339))
 	if isUniqueViolation(err) {
@@ -155,8 +174,8 @@ func CreateCollection(db *sql.DB, name, baseURL string) (model.Collection, error
 // GetCollection retrieves a collection by ID; the error wraps ErrNoSuchCollection when absent.
 func GetCollection(db *sql.DB, id string) (model.Collection, error) {
 	var c model.Collection
-	err := db.QueryRow(`SELECT id, name, base_url, seed_id, seed_version FROM collections WHERE id = ?`, id).
-		Scan(&c.ID, &c.Name, &c.BaseURL, &c.SeedID, &c.SeedVersion)
+	err := db.QueryRow(`SELECT id, name, base_url, seed_id, seed_version, expanded FROM collections WHERE id = ?`, id).
+		Scan(&c.ID, &c.Name, &c.BaseURL, &c.SeedID, &c.SeedVersion, &c.Expanded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Collection{}, fmt.Errorf("GetCollection %q: %w", id, ErrNoSuchCollection)
 	}
@@ -164,6 +183,38 @@ func GetCollection(db *sql.DB, id string) (model.Collection, error) {
 		return model.Collection{}, fmt.Errorf("GetCollection %q: %w", id, err)
 	}
 	return c, nil
+}
+
+// maxUniqueNameTries bounds the "Name 2", "Name 3"... search in CreateCollectionUnique.
+const maxUniqueNameTries = 100
+
+// CreateCollectionUnique is CreateCollection, but a name that is taken gets a numeric suffix
+// ("Pets", "Pets 2", "Pets 3"...) instead of failing with ErrDuplicateName.
+func CreateCollectionUnique(db *sql.DB, name, baseURL string) (model.Collection, error) {
+	name = strings.TrimSpace(name)
+	for i := 1; i <= maxUniqueNameTries; i++ {
+		try := name
+		if i > 1 {
+			try = fmt.Sprintf("%s %d", name, i)
+		}
+		c, err := CreateCollection(db, try, baseURL)
+		if !errors.Is(err, ErrDuplicateName) {
+			return c, err
+		}
+	}
+	return model.Collection{}, ErrDuplicateName
+}
+
+// SetCollectionExpanded records whether the sidebar shows the collection open.
+func SetCollectionExpanded(db *sql.DB, id string, expanded bool) error {
+	res, err := db.Exec(`UPDATE collections SET expanded = ? WHERE id = ?`, expanded, id)
+	if err != nil {
+		return fmt.Errorf("SetCollectionExpanded %q: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("SetCollectionExpanded %q: %w", id, ErrNoSuchCollection)
+	}
+	return nil
 }
 
 // UpdateCollection renames a collection and sets its base URL.

@@ -99,6 +99,8 @@ type Collection struct {
 	BaseURL     string `json:"base_url,omitempty"`
 	SeedID      string `json:"seed_id,omitempty"`
 	SeedVersion int    `json:"seed_version,omitempty"`
+	// Expanded is whether the sidebar shows the collection open; new collections start expanded.
+	Expanded bool `json:"expanded"`
 }
 
 // BuiltIn reports whether the collection came from the embedded seed.
