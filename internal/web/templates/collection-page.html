@@ -5,6 +5,11 @@
     {{if .Collection.BaseURL}}<span class="muted">{{.Collection.BaseURL}}</span>{{end}}
   </div>
   {{if .Rows}}
+  <div style="margin:.5rem 0">
+    <button type="button" hx-post="/collections/{{.Collection.ID}}/run-all" hx-target="#sequence-area" hx-swap="innerHTML">▶ Run all</button>
+    <span class="muted">Runs each endpoint with its newest saved test config, one after another.</span>
+  </div>
+  <div id="sequence-area"></div>
   <table>
     <thead><tr><th>Endpoint</th><th>Last verdict</th><th>p95</th><th>Error %</th><th>Last run (UTC)</th><th>Report</th></tr></thead>
     <tbody>
