@@ -37,25 +37,27 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] C3. Grouped sidebar, collection page, import into a collection, run all — FR-COLL-01, 07, 08, FR-REP-03 (`fb43439`..`e12d36e`; `scripts/race.sh` green)
 - [x] C3b. (`2e975a0`, `60b0a73`; race.sh green; D-019) SQLite write queue: a single dedicated write connection (readers separate) so Primus's own writers queue instead of poll. Evidence: single writer calls blocked 3.97s to 4.79s in an instrumented `TestDeleteAndClear_SurviveConcurrentWriters`, and `SaveRun` returned `SQLITE_BUSY` once in 200 runs even with pacing (busy handler polls, it does not queue). Provisioning (step 13) already inserts many rows from an async job while the UI polls, which is this load. `inImmediateTx` pins a conn, so audit it first. Cheaper stopgap if needed earlier: bounded retry-with-backoff on `SaveRun` and `CompleteInsight`.
 - [x] C4. (`cc79b1a`..`ff05cb0`) Per-endpoint report with trend table and the key — FR-REP-01, 02
-- [ ] C5. Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison — FR-INS-01..03
+- [x] C5. (`7926340`..`79edea3`; D-020; race.sh NOT run, Docker down) Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison — FR-INS-01..03
 
 ## Current step
-Step C5: Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison
-Requirements: FR-INS-01..03
-Status: not started
+No roadmap step left: C5 was the last one. Next: run `scripts/race.sh` once Docker is up, check C4/C5 UI visually, then ask the user what to plan next.
+Requirements: none
+Status: roadmap complete
 
 ## Handoff notes
-- Done (C4, `cc79b1a`..`ff05cb0`): `store.RecentRunsByRequest`; `GET /requests/{id}/report` (`internal/web/endpoint_report.go`, `endpoint-report.html`): header, latest run, last-10 trend table, findings via `insight-fragment`, empty state with a Run button that opens the builder; one fixed key (`internal/web/readkey.go`, `report-key.html`) on the endpoint page, run page, report.html and report.md, login latency only when a pool ran. Tests: `TestRecentRunsByRequest_*`, `TestEndpointReport_*`, `TestRunReports_AllCarryTheKey`, `TestCollectionPage_EveryEndpointLinksToItsReport`. `check.sh all` green; `/review` found nothing blocking. Docs: `reports.md`, `collections.md`.
-- Next action: begin C5 (`/next`, plan mode).
-- Uncommitted: none (this progress edit pending commit).
-- Decisions: collection page keeps its last-run link and `-` columns; the report link sits in the endpoint cell ("endpoint report"), because existing tests lock the old row shape. A collection `base_url` cannot hold userinfo or a query (store rejects it).
-- Watch out: `scripts/race.sh` NOT run for C4 (no goroutine code; store change is a plain read). The endpoint report was NOT visually checked: Playwright is not installed, and adding it needs the user's OK. Check at 360px (summary and trend tables are wrapped in `overflow-x:auto`), plus the collection page, sidebar collapse and Run all from C3.
+- Done (C5, `7926340`..`79edea3`, docs `616be2e`): `insight.Sections` (numbers, causes, next steps, comparison, fallback marker) saved as JSON in `insights.sections` (idempotent migration); rules analyzer fills it; Ollama keeps its reply shape and maps headline/explanation/next_steps onto it; `Summary.Previous` + `comparisonLines` write the previous-run comparison by code; `store.PreviousRunOfEndpoint`, `CompleteInsightSections`; fragment, report.html and report.md render sections, fallback note and legacy text. Tests: `TestRulesSections_*`, `TestComparison_*`, `TestOllamaSections_*`, `TestOllamaInput_*`, `TestPreviousRunOfEndpoint*`, `TestInsightFragment_*`, `TestReports_*`, `TestInsightSections_LeakNoTokenAndNameOllamaConsistently`. `check.sh all` green; `/review` found nothing blocking and its non-blocking notes are fixed. Docs: `reports.md`, D-020.
+- Next action: no roadmap step left. Run `scripts/race.sh` when Docker is up, then ask the user what to plan next.
+- Uncommitted: this progress edit only.
+- Decisions: D-020 (in decisions.md). Ollama wire contract unchanged because existing tests pin it; the comparison is code-written for both analyzers.
+- Watch out: `scripts/race.sh` NOT run for C5: Docker Desktop was down (an earlier attempt died with EOF). `generateRunInsight` now reads the DB before calling the analyzer; run race before relying on it.
+- Watch out: C4 and C5 UI NOT visually checked (no Playwright; adding it needs the user's OK). Check the insight headings and lists at 360px on the run page, endpoint report and report.html, plus the C3 collection page, sidebar collapse and Run all.
+- Watch out: grounding checks that a number appears anywhere in the input, not that it matches its metric (noted in D-020).
 - Watch out: this checkout has autocrlf, so `gofmt -l` flags CRLF files (e.g. `internal/store/collections.go`); that is noise.
 - Watch out: never use `git stash` as a check; it rewrote line endings in the working tree.
 - Watch out: rule: never call the `*sql.DB` while holding a conn, rows or tx. Follow-ups: `AppendCredentials`/`SaveCredentialPool` use deferred txs, move to `inImmediateTx`; `ListAllRuns`/`ListRuns` unmarshal while rows open; consider `-timeout 120s` in `commands.env` and `scripts/race.sh`.
 - Watch out: `TestRunBurst_DeliversPulses` (`internal/engine/engine_test.go:315`) failed once under race load; leave unless it fails again.
 - Open C3 nits: delete collection between two run-all items skips the rest; `LatestRunsByRequest` reads every payload; run-all item links its report while running (404); `runID` UnixNano only; builder does not load saved configs.
-- Run /remap: new `internal/seed`, `internal/web/{sequence,collection_page,endpoint_report,readkey}.go`.
+- Run /remap: new `internal/seed`, `internal/web/{sequence,collection_page,endpoint_report,readkey}.go`, `internal/insight/compare.go`.
 
 ## Log
 - 2026-10-21 claude-kit 1.4.0 installed into Primus on `ft/dev`; roadmap rebuilt from the repo state at `6e20275`
@@ -80,3 +82,4 @@ Status: not started
 - 2026-10-22 step C3 partial (`fb43439`..`e12d36e`; race.sh pending)
 - 2026-10-22 step C3b done (`2e975a0`..`60b0a73`)
 - 2026-10-22 step C4 done (`cc79b1a`..`ff05cb0`)
+- 2026-10-22 step C5 done (`7926340`..`79edea3`; race run pending, Docker down)
