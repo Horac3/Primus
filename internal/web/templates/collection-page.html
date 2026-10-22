@@ -15,7 +15,8 @@
     <tbody>
     {{range .Rows}}
       <tr>
-        <td><a href="#" hx-get="/requests/{{.Endpoint.ID}}" hx-target="#main-panel" hx-swap="innerHTML"><span class="method">{{.Endpoint.Method}}</span> {{.Endpoint.Name}}</a></td>
+        <td><a href="#" hx-get="/requests/{{.Endpoint.ID}}" hx-target="#main-panel" hx-swap="innerHTML"><span class="method">{{.Endpoint.Method}}</span> {{.Endpoint.Name}}</a>
+          <a href="#" class="muted" hx-get="/requests/{{.Endpoint.ID}}/report" hx-target="#main-panel" hx-swap="innerHTML">endpoint report</a></td>
         <td>{{.Verdict}}</td>
         <td>{{.P95}}</td>
         <td>{{.ErrPct}}</td>

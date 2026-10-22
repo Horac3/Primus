@@ -285,3 +285,22 @@ func TestSidebar_ToggleOnlyPostsWhenStateChangesAndDoesNotLeakToChildren(t *test
 		t.Errorf("hx-vals would be inherited by the buttons inside: %s", g)
 	}
 }
+
+func TestCollectionPage_EveryEndpointLinksToItsReport(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	col := seedCollection(t, db, "Shop", 2, 0)
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	if err := store.SaveRun(db, model.Run{ID: "run-a", TestConfigID: "cfg-Shop-epa", StartedAt: at, FinishedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getPath(t, mux, "/collections/"+col.ID).Body.String()
+
+	for _, id := range []string{"Shop-epa", "Shop-epb"} {
+		row := tableRow(t, body, id)
+		if !strings.Contains(row, `hx-get="/requests/`+id+`/report"`) {
+			t.Errorf("row of %s does not link to its report: %s", id, row)
+		}
+	}
+}
