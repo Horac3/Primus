@@ -5,6 +5,38 @@ you save without choosing one go to **My endpoints**. Open the **Collections**
 panel from the sidebar to create, rename, set a base URL for, clear the history of,
 or delete a collection.
 
+## The sidebar and the collection page
+
+The sidebar lists endpoints under their collection. Click a collection's name to
+collapse or expand it; Primus remembers that after a reload. An empty collection
+shows "no endpoints yet" and an **Add endpoint** button that opens the builder with
+that collection already chosen.
+
+**Overview** opens the collection page: a table with one row per endpoint showing the
+verdict, p95, error rate and start time (UTC) of its latest run, and a link to that
+run's report. An endpoint that has never run shows `-` in every column.
+
+## Run all
+
+**Run all** on the collection page runs every endpoint in the collection one after
+another, each with the test config it was last run (or saved) with. Only one endpoint
+runs at a time. An endpoint with no saved test config is listed as skipped, with the
+reason, and the sequence moves on. Progress updates every second, with a link to each
+run's report as it finishes.
+
+**Stop all** cancels the run in progress, which is recorded as stopped, and marks the
+endpoints that have not started as stopped; no further runs start. Starting **Run all**
+on a collection that is already running shows the sequence in progress instead of
+starting a second one. If you delete the collection or an endpoint mid-sequence, the
+affected endpoints are skipped.
+
+## Importing an OpenAPI spec
+
+Importing a spec creates a new collection named after the spec's `info.title` (or
+"Imported API" when it has none) and puts the imported endpoints in it. If a collection
+with that name exists, the new one gets a number: "Pet API 2". Importing the same spec
+twice therefore gives two independent copies.
+
 ## Base URL
 
 A collection can have a base URL such as `https://api.example.com`. An endpoint
