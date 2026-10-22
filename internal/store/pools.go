@@ -186,6 +186,7 @@ func migrateMaskedFields(db *sql.DB) error {
 		}
 		ids = append(ids, id)
 	}
+	// Close before the calls below: OpenDB's pool has one connection, so they would wait on this cursor.
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("migrate masked fields: %w", err)

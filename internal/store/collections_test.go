@@ -1,11 +1,12 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -481,13 +482,64 @@ func TestScopeRequestIDs(t *testing.T) {
 	}
 }
 
-// A run finishing elsewhere commits while a delete or clear is between its reads and its first write.
-// With a deferred transaction SQLite fails that upgrade at once (SQLITE_BUSY_SNAPSHOT) instead of waiting.
+// Another process (a second handle on the file, like `primus run`) holds the write lock and then commits.
+// With a deferred transaction the delete would read first and fail at once with SQLITE_BUSY_SNAPSHOT;
+// BEGIN IMMEDIATE waits for the lock under busy_timeout.
+func TestDeleteCollection_WaitsForWriterInAnotherProcess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.db")
+	a, err := store.OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := store.Migrate(a); err != nil {
+		t.Fatal(err)
+	}
+	col, err := store.CreateCollection(a, "Doomed", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	ctx := context.Background()
+	conn, err := b.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteCollection(a, col.ID)
+		done <- err
+	}()
+	time.Sleep(150 * time.Millisecond) // let the delete reach its wait for the lock
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("DeleteCollection behind another process's writer: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DeleteCollection still blocked after the other writer committed")
+	}
+}
+
+// In-process regression guard: writers sharing the one connection never see SQLITE_BUSY, and nothing is
+// retried. It does not reproduce the cross-process upgrade failure; the test above covers that.
 func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
 	f := newFixture(t) // b1 has config cfg-b1; the writer keeps adding runs to it
 	stop := make(chan struct{})
 	writerErr := make(chan error, 1) // reported from the test goroutine: t.Errorf after the test returns panics
-	const maxWriterRetries = 20
 	var saved atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -499,23 +551,12 @@ func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
 				return
 			default:
 			}
-			// The helper writer retries on SQLITE_BUSY: SQLite's busy handler polls instead of queuing, so a
-			// back-to-back writer can be starved past busy_timeout. That is documented behaviour, and it is
-			// not what this test guards; delete and clear below are never retried.
-			var err error
-			for try := 0; try <= maxWriterRetries; try++ {
-				if err = store.SaveRun(f.db, model.Run{ID: fmt.Sprintf("w-%d", i), TestConfigID: "cfg-b1"}); err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") {
-					break
-				}
-			}
-			if err != nil {
+			// Never retried: the single connection queues writers, so any error is a failure.
+			if err := store.SaveRun(f.db, model.Run{ID: fmt.Sprintf("w-%d", i), TestConfigID: "cfg-b1"}); err != nil {
 				writerErr <- err
 				return
 			}
 			saved.Add(1)
-			// SQLite's busy handler is not fair: a writer that never pauses can starve the other connection
-			// past busy_timeout. Real writers (finishing runs) are not back to back.
-			time.Sleep(time.Millisecond)
 		}
 	}()
 	var stopOnce sync.Once
@@ -547,7 +588,6 @@ func TestDeleteAndClear_SurviveConcurrentWriters(t *testing.T) {
 		if _, err := store.ClearHistory(f.db, store.Scope{Kind: store.ScopeEndpoint, ID: "a1"}); err != nil {
 			t.Errorf("ClearHistory #%d: %v", i, err)
 		}
-		time.Sleep(5 * time.Millisecond) // both sides pace themselves: the busy handler polls, so back-to-back writers starve each other
 	}
 	join()
 	select {
@@ -666,5 +706,40 @@ func TestSetCollectionExpanded_PersistsAndDefaultsOpen(t *testing.T) {
 	}
 	if err := store.SetCollectionExpanded(db, "nope", true); !errors.Is(err, store.ErrNoSuchCollection) {
 		t.Fatalf("want ErrNoSuchCollection, got %v", err)
+	}
+}
+
+// A panic inside the callback must not return the only connection to the pool with the transaction open:
+// later writes would never commit and the file would stay write-locked for other processes.
+func TestInImmediateTx_PanicRollsBackAndFreesTheLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "panic.db")
+	a, err := store.OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := store.Migrate(a); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() { _ = recover() }()
+		_ = store.InImmediateTx(a, func(q store.Queryer) error {
+			if _, err := q.Exec(`INSERT INTO runs (id, test_config_id, started_at, finished_at, payload) VALUES ('lost','c','','','{}')`); err != nil {
+				t.Error(err)
+			}
+			panic("boom")
+		})
+	}()
+
+	b, err := store.OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err := store.SaveRun(b, model.Run{ID: "after"}); err != nil {
+		t.Fatalf("second handle write after a panicked transaction: %v", err)
+	}
+	if _, err := store.GetRun(a, "lost"); err == nil {
+		t.Error("write from the panicked transaction was kept, want it rolled back")
 	}
 }

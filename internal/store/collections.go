@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -399,7 +400,7 @@ func (q connQ) Exec(query string, args ...any) (sql.Result, error) {
 }
 
 // inImmediateTx runs fn in a transaction that takes the write lock up front (BEGIN IMMEDIATE). A
-// deferred transaction that reads first fails at once with SQLITE_BUSY when another connection commits
+// deferred transaction that reads first fails at once with SQLITE_BUSY when another process commits
 // before its first write, and busy_timeout does not apply to that upgrade; waiting for the lock at BEGIN
 // does honour it. Used by the delete and clear paths, which read counts before they write.
 func inImmediateTx(db *sql.DB, fn func(q queryer) error) error {
@@ -412,14 +413,25 @@ func inImmediateTx(db *sql.DB, fn func(q queryer) error) error {
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
+	// Runs on error and on panic. With one pooled connection, returning it mid-transaction would put every
+	// later write inside that transaction and keep the file write-locked; if the rollback itself fails, the
+	// connection is discarded instead.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if _, err := conn.ExecContext(ctx, `ROLLBACK`); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
 	if err := fn(connQ{conn}); err != nil {
-		conn.ExecContext(ctx, `ROLLBACK`)
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		conn.ExecContext(ctx, `ROLLBACK`)
 		return fmt.Errorf("commit: %w", err)
 	}
+	committed = true
 	return nil
 }
 

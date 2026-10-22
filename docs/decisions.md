@@ -249,3 +249,10 @@ Decision: `seed.Ensure` runs only in server start (not `primus run`), so existin
 `ErrDuplicateName` if a user collection holds the name. Seeded rows have fixed IDs (`seed-jp-<slug>`); on restore a row that already
 holds such an ID (the user moved it to another collection) is left where it is. The restore handler takes no `scopeGuard`: it only inserts.
 Revisit if: seed versions need upgrading in place, or more than one built-in collection ships.
+
+## D-019: One SQLite connection per process; in-process callers wait in the pool
+Context: SQLite's busy handler polls rather than queues, so back-to-back writers starved another connection past `busy_timeout` (calls blocked 4-5s; one `SQLITE_BUSY` in about 200 race runs). Provisioning writes many rows from an async job while the UI polls.
+Decision: `store.OpenDB` sets `SetMaxOpenConns(1)`. Callers in this process wait in `database/sql`'s pool (unordered, no timeout, since store calls take no context), so they never reach the busy handler. Reads wait too. `busy_timeout` and `BEGIN IMMEDIATE` stay for a second process on the same file (`primus run`). Amends D-013, which assumed concurrent in-process readers.
+Rules that follow: never call the `*sql.DB` while holding a connection, open rows or a transaction from it (it deadlocks); `inImmediateTx` rolls back on error and panic, and discards the connection if the rollback fails.
+Revisit if: history grows enough that full-table reads (`ListAllRuns`) delay `SaveRun`; then read raw rows and unmarshal after closing, or add a separate read-only pool.
+Follow-ups: `AppendCredentials` and `SaveCredentialPool` use deferred transactions and should move to `inImmediateTx`; store calls could take a context.

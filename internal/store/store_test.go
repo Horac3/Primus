@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -456,6 +457,98 @@ func TestInsightLifecycle(t *testing.T) {
 	}
 	if _, started, err := store.StartInsight(db, "run-insight", "rules", "rules-v1"); err != nil || !started {
 		t.Fatalf("StartInsight after completion started=%v err=%v, want regeneration", started, err)
+	}
+}
+
+// All in-process callers share one connection, so they queue in the pool instead of polling SQLite's lock.
+func TestOpenDB_UsesOneConnection(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if got := db.Stats().MaxOpenConnections; got != 1 {
+		t.Errorf("MaxOpenConnections = %d, want 1", got)
+	}
+}
+
+// A write behind a held connection waits for it, then succeeds.
+func TestCompleteInsight_QueuesBehindHeldConnection(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, _, err := store.StartInsight(db, "run-a", "rules", "rules-v1"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			conn.Close()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- store.CompleteInsight(db, "run-a", "rules", "rules-v1", "text") }()
+	select {
+	case err := <-done:
+		t.Fatalf("CompleteInsight returned (%v) while the connection was held, want it queued", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	conn.Close()
+	released = true
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CompleteInsight after release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CompleteInsight still blocked after the connection was released")
+	}
+}
+
+// A write queued behind an open read completes once the read is closed.
+func TestCompleteInsight_QueuesBehindOpenRead(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for _, id := range []string{"run-a", "run-b"} {
+		if _, _, err := store.StartInsight(db, id, "rules", "rules-v1"); err != nil {
+			t.Fatalf("StartInsight %s: %v", id, err)
+		}
+	}
+
+	rows, err := db.Query(`SELECT run_id FROM insights`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("expected a first row: %v", rows.Err())
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- store.CompleteInsight(db, "run-a", "rules", "rules-v1", "text") }()
+	select {
+	case err := <-done:
+		t.Fatalf("CompleteInsight returned (%v) while a read was open, want it queued", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	rows.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CompleteInsight after the read closed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CompleteInsight still blocked after the read closed")
 	}
 }
 

@@ -12,11 +12,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// dsnPragmas apply to every pooled connection. busy_timeout makes a write that meets a lock wait up to 5s
-// instead of failing with SQLITE_BUSY; WAL lets readers and the single writer proceed together (D-013).
+// dsnPragmas apply to every connection. busy_timeout makes a write that meets another process's lock wait
+// up to 5s instead of failing with SQLITE_BUSY; WAL keeps readers in other processes working (D-013).
 const dsnPragmas = "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 
 // OpenDB opens (or creates) a SQLite database file at path.
+//
+// The pool is limited to one connection so this process's callers wait in database/sql's pool (a released
+// connection goes to a waiting caller) instead of polling SQLite's busy handler, which can starve a writer
+// past busy_timeout. The consequence: never call the *sql.DB while holding a connection, open rows or a
+// transaction from it, or the call waits forever (store calls have no context, so no timeout).
+// busy_timeout and BEGIN IMMEDIATE stay for other processes on the same file (`primus run`).
 func OpenDB(path string) (*sql.DB, error) {
 	sep := "?"
 	if strings.Contains(path, "?") {
@@ -26,6 +32,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
+	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping sqlite %q: %w", path, err)
