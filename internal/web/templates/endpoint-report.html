@@ -1,0 +1,58 @@
+{{- /* endpoint-report.html — fragment: one endpoint's latest run, trend table and findings. Target: #main-panel */ -}}
+<div class="card" data-testid="endpoint-report">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap">
+    <strong><span class="method">{{.Endpoint.Method}}</span> {{.URL}}</strong>
+    {{if .Collection}}<span class="muted">{{.Collection}}</span>{{end}}
+  </div>
+  <p class="muted">{{.Endpoint.Name}}</p>
+
+  {{if .Latest}}
+  <section data-testid="latest-run">
+    <h2>Latest run</h2>
+    <p><span class="{{outcomeClass .Latest.Run.Outcome}}">{{.Latest.Verdict}}</span>
+       <span class="muted">{{.Latest.Started}} UTC</span>
+       <a href="/runs/{{.Latest.Run.ID}}">full run</a></p>
+    <table>
+      <tr><th>Requests</th><td>{{.Latest.Run.Summary.TotalRequests}}</td>
+          <th>Throughput</th><td>{{requestsPerSec .Latest.Run}} req/s</td></tr>
+      <tr><th>p50</th><td>{{.Latest.Run.Summary.P50Millis}} ms</td>
+          <th>Error rate</th><td>{{.Latest.ErrPct}}</td></tr>
+      <tr><th>p95</th><td>{{.Latest.Run.Summary.P95Millis}} ms</td>
+          <th>Cancelled</th><td>{{.Latest.Run.Summary.Cancelled}}</td></tr>
+      <tr><th>p99</th><td>{{.Latest.Run.Summary.P99Millis}} ms</td><th></th><td></td></tr>
+    </table>
+  </section>
+
+  <section data-testid="trend">
+    <h2>Last {{len .Rows}} run{{if ne (len .Rows) 1}}s{{end}}</h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Time (UTC)</th><th>Requests</th><th>p50</th><th>p95</th><th>p99</th><th>Error %</th><th>Throughput</th><th>Cancelled</th><th>Verdict</th></tr></thead>
+      <tbody>
+      {{range .Rows}}
+        <tr data-testid="trend-row">
+          <td><a href="/runs/{{.Run.ID}}">{{.Started}}</a></td>
+          <td>{{.Run.Summary.TotalRequests}}</td>
+          <td>{{.Run.Summary.P50Millis}} ms</td>
+          <td>{{.Run.Summary.P95Millis}} ms</td>
+          <td>{{.Run.Summary.P99Millis}} ms</td>
+          <td>{{.ErrPct}}</td>
+          <td>{{requestsPerSec .Run}}</td>
+          <td>{{.Run.Summary.Cancelled}}</td>
+          <td>{{.Verdict}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section data-testid="findings">
+    <h2>Findings</h2>
+    {{template "insight-fragment" .Insight}}
+  </section>
+  {{else}}
+  <p class="muted" data-testid="no-runs">no runs yet</p>
+  <button type="button" hx-get="/requests/{{.Endpoint.ID}}" hx-target="#main-panel" hx-swap="innerHTML">▶ Run</button>
+  {{end}}
+</div>

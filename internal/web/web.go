@@ -84,6 +84,7 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	mux.HandleFunc("POST /pools/{id}/masking", poolMaskingHandler(db, tmpl))
 	mux.HandleFunc("POST /pools/{id}/test-login", poolTestLoginHandler(db, tmpl))
 	mux.HandleFunc("GET /requests/{id}", requestPanelHandler(db, tmpl, generator != nil))
+	mux.HandleFunc("GET /requests/{id}/report", endpointReportHandler(db, tmpl))
 	mux.HandleFunc("POST /requests/{id}/payloads/generate", postGeneratePayloadsHandler(db, generator))
 	mux.HandleFunc("POST /nl/request", postNLRequestHandler(db, generator))
 	mux.HandleFunc("POST /nl/testconfig", postNLTestConfigHandler(db, generator, bounds))
