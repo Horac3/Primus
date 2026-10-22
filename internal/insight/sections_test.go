@@ -44,6 +44,9 @@ func TestRulesSections_CausesAndStepsFollowFindings(t *testing.T) {
 	if strings.Contains(causes, "No assertions") {
 		t.Errorf("info finding listed as a cause: %q", causes)
 	}
+	if !strings.Contains(strings.Join(got.Sections.Numbers, "\n"), "No assertions were configured") {
+		t.Errorf("Numbers = %v, want the info finding as an observation", got.Sections.Numbers)
+	}
 	steps := strings.Join(got.Sections.NextSteps, "\n")
 	if !strings.Contains(steps, "timeout") || !strings.Contains(steps, "assertion") {
 		t.Errorf("NextSteps = %q, want a step for the timeout and for assertions", steps)

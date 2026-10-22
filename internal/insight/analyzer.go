@@ -75,6 +75,7 @@ func (RulesAnalyzer) Analyze(ctx context.Context, summary Summary, findings []Fi
 		ModelName:    (RulesAnalyzer{}).ModelName(),
 		CreatedAt:    time.Now().UTC(),
 	}
+	var observations []string
 	if len(findings) == 0 {
 		result.Sentences = []string{"No diagnostic findings were identified."}
 	} else {
@@ -104,12 +105,15 @@ func (RulesAnalyzer) Analyze(ctx context.Context, summary Summary, findings []Fi
 				result.Sentences = append(result.Sentences, text)
 				if finding.Severity != SeverityInfo {
 					result.Sections.Causes = append(result.Sections.Causes, text)
+				} else {
+					observations = append(observations, text)
 				}
 			}
 		}
 	}
 	result.Text = strings.Join(result.Sentences, " ")
-	result.Sections.Numbers = numberLines(summary)
+	// Info findings are facts about the run, not causes, so they sit with the numbers.
+	result.Sections.Numbers = append(numberLines(summary), observations...)
 	result.Sections.Comparison = comparisonLines(summary)
 	if len(result.Sections.Causes) == 0 {
 		result.Sections.Causes = []string{"Nothing in these numbers points to a problem."}
