@@ -177,7 +177,7 @@ func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool, g
 			return
 		}
 
-		var defs []model.RequestDefinition
+		var spec importer.Spec
 		var err error
 		if specURL != "" {
 			if !strings.HasPrefix(specURL, "http://") && !strings.HasPrefix(specURL, "https://") {
@@ -186,19 +186,33 @@ func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool, g
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 			defer cancel()
-			defs, err = importer.ImportFromURL(ctx, specURL)
+			spec, err = importer.FetchSpec(ctx, specURL)
 		} else {
-			defs, err = importer.ImportFromBytes([]byte(specText))
+			spec, err = importer.ParseSpec([]byte(specText))
 		}
 		if err != nil {
 			http.Error(w, "import failed: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		// Saving may create "My endpoints"; a delete of it must not land between that and the insert.
+		// Each import is a fresh collection named from the spec title; endpoint IDs carry the collection
+		// ID so importing the same spec again never overwrites the first copy. The lock keeps a delete
+		// of the collection from landing between its creation and the inserts.
 		guard.mu.Lock()
+		col, err := store.CreateCollectionUnique(db, spec.Title, "")
+		if err != nil {
+			guard.mu.Unlock()
+			http.Error(w, "create collection: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defs := spec.Defs
 		for i := range defs {
+			defs[i].ID = col.ID + "-" + defs[i].ID
+			defs[i].CollectionID = col.ID
 			if err := store.SaveRequestDefinition(db, defs[i]); err != nil {
+				if _, derr := store.DeleteCollection(db, col.ID); derr != nil {
+					log.Printf("web: import cleanup of collection %s: %v", col.ID, derr)
+				}
 				guard.mu.Unlock()
 				http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
 				return
@@ -215,6 +229,7 @@ func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool, g
 		// Sidebar refresh, plus the first imported endpoint loaded into the
 		// main panel via an out-of-band swap.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("HX-Trigger", "collections-changed")
 		if err := tmpl.ExecuteTemplate(w, "sidebar.html", data); err != nil {
 			log.Printf("template sidebar.html: %v", err)
 			return

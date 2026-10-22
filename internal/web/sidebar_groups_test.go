@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"database/sql"
 	"net/http"
 	"net/url"
 	"strings"
@@ -111,5 +112,80 @@ func TestNewEndpointPanel_PreselectsCollection(t *testing.T) {
 
 	if !strings.Contains(body, `value="`+col.ID+`" selected`) {
 		t.Errorf("collection not preselected: %s", body)
+	}
+}
+
+const importSpec = `{"openapi":"3.0.0","info":{"title":"Pet API","version":"1"},"paths":{
+ "/pets":{"get":{"operationId":"listPets","responses":{"200":{"description":"ok"}}}},
+ "/pets/{id}":{"get":{"operationId":"getPet","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"ok"}}}}}}`
+
+func collectionNamed(t *testing.T, db *sql.DB, name string) model.Collection {
+	t.Helper()
+	cols, err := store.ListCollections(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cols {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("no collection named %q in %+v", name, cols)
+	return model.Collection{}
+}
+
+func TestImport_CreatesCollectionNamedFromSpecTitle(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	rr := postForm(t, mux, "/import", url.Values{"spec_text": {importSpec}})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /import = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("HX-Trigger"); !strings.Contains(got, "collections-changed") {
+		t.Errorf("HX-Trigger = %q, want collections-changed", got)
+	}
+	col := collectionNamed(t, db, "Pet API")
+	defs, _ := store.ListRequestDefinitionsByCollection(db, col.ID)
+	if len(defs) != 2 {
+		t.Fatalf("collection holds %d endpoints, want 2", len(defs))
+	}
+	for _, d := range defs {
+		if !strings.HasPrefix(d.ID, col.ID+"-") {
+			t.Errorf("endpoint ID %q is not prefixed with its collection", d.ID)
+		}
+	}
+	if mine, _ := store.ListRequestDefinitionsByCollection(db, store.DefaultCollectionID); len(mine) != 0 {
+		t.Errorf("import leaked %d endpoints into My endpoints", len(mine))
+	}
+}
+
+func TestImport_SameSpecTwiceMakesIndependentCollections(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	postForm(t, mux, "/import", url.Values{"spec_text": {importSpec}})
+	postForm(t, mux, "/import", url.Values{"spec_text": {importSpec}})
+
+	first, second := collectionNamed(t, db, "Pet API"), collectionNamed(t, db, "Pet API 2")
+	for _, c := range []model.Collection{first, second} {
+		if defs, _ := store.ListRequestDefinitionsByCollection(db, c.ID); len(defs) != 2 {
+			t.Errorf("%s holds %d endpoints, want 2", c.Name, len(defs))
+		}
+	}
+}
+
+func TestImport_SpecWithoutOperationsCreatesEmptyCollection(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+
+	rr := postForm(t, mux, "/import", url.Values{"spec_text": {`{"openapi":"3.0.0","info":{"title":"Empty","version":"1"},"paths":{}}`}})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /import = %d", rr.Code)
+	}
+	if c := collectionNamed(t, db, "Empty"); c.ID == "" {
+		t.Error("an operation-less spec should still give an empty collection")
 	}
 }
