@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
@@ -21,6 +23,9 @@ const (
 	seqSkipped = "skipped"
 	seqStopped = "stopped"
 )
+
+// reasonStopped is start's answer when Stop arrived before the run was registered.
+const reasonStopped = "stopped"
 
 // seqTTL bounds how long a finished sequence stays viewable.
 const seqTTL = 5 * time.Minute
@@ -88,6 +93,7 @@ func (s *sequence) finish() {
 // registers the run, like postRunHandler, so a delete of the collection cannot land in between.
 func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *scopeGuard) {
 	defer s.finish()
+	defer s.cancel() // releases the context when the sequence ends without Stop
 	items := s.view().Items
 	for i, item := range items {
 		if ctx.Err() != nil {
@@ -95,6 +101,10 @@ func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *sc
 			return
 		}
 		started, reason := s.start(ctx, db, reg, guard, item.EndpointID)
+		if reason == reasonStopped {
+			s.stopRemaining(i)
+			return
+		}
 		if reason != "" {
 			s.set(i, func(it *seqItem) { it.Status, it.Reason = seqSkipped, reason })
 			continue
@@ -106,8 +116,10 @@ func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *sc
 			reg.Stop(started.ID)
 			<-started.Handle.done // the run persists before done closes
 		}
+		// What the run did decides the label; the sequence context only decides whether to go on.
+		// done is closed after the result is set, so reading it here is ordered.
 		status := seqDone
-		if ctx.Err() != nil {
+		if res := started.Handle.result; res == nil || res.Stopped {
 			status = seqStopped
 		}
 		s.set(i, func(it *seqItem) { it.Status = status })
@@ -119,6 +131,10 @@ func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *sc
 func (s *sequence) start(ctx context.Context, db *sql.DB, reg *Registry, guard *scopeGuard, endpointID string) (startedRun, string) {
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
+	// A Stop that arrived while waiting for the guard must not start one more run.
+	if ctx.Err() != nil {
+		return startedRun{}, reasonStopped
+	}
 	def, err := store.GetRequestDefinition(db, endpointID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return startedRun{}, "endpoint no longer exists"
@@ -150,6 +166,14 @@ type sequenceStore struct {
 	byID map[string]*sequence
 }
 
+// newSequenceID carries random bytes: the Windows clock is coarse enough for two starts to share a
+// nanosecond value, and a clash would overwrite the first sequence in the store.
+func newSequenceID() string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("seq-%d-%s", time.Now().UnixNano(), hex.EncodeToString(b[:]))
+}
+
 func newSequenceStore() *sequenceStore { return &sequenceStore{byID: map[string]*sequence{}} }
 
 func (st *sequenceStore) get(id string) *sequence {
@@ -174,7 +198,7 @@ func (st *sequenceStore) startOrJoin(collectionID, collectionName string, items 
 			delete(st.byID, id)
 		}
 	}
-	s = &sequence{id: fmt.Sprintf("seq-%d", time.Now().UnixNano()), collectionID: collectionID,
+	s = &sequence{id: newSequenceID(), collectionID: collectionID,
 		collectionName: collectionName, items: items, cancel: cancel}
 	st.byID[s.id] = s
 	return s, true

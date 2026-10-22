@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"database/sql"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -197,4 +198,68 @@ func TestCollectionPage_OffersRunAllOnlyWhenThereAreEndpoints(t *testing.T) {
 	if strings.Contains(without, "run-all") {
 		t.Errorf("an empty collection offers Run all: %s", without)
 	}
+}
+
+var runLinkRe = regexp.MustCompile(`href="/runs/(run-[0-9]+)"`)
+
+func TestRunAll_ItemStatusFollowsTheRunNotTheSequence(t *testing.T) {
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	srv, release := slowTarget(t)
+	defer release()
+	col := runAllCollection(t, db, srv.URL, []string{"first", "second"}, nil)
+
+	id := startRunAll(t, mux, col)
+	body := waitSequence(t, mux, id, func(b string) bool { return strings.Contains(b, `data-status="running"`) })
+	runID := runLinkRe.FindStringSubmatch(itemRow(t, body, "first"))[1]
+	// Stop only the first run, not the sequence.
+	if rr := postForm(t, mux, "/runs/"+runID+"/stop", nil); rr.Code >= 400 {
+		t.Fatalf("POST run stop = %d: %s", rr.Code, rr.Body.String())
+	}
+	body = waitSequence(t, mux, id, func(b string) bool {
+		return strings.Contains(itemRow(t, b, "second"), `data-status="running"`)
+	})
+
+	if row := itemRow(t, body, "first"); !strings.Contains(row, `data-status="stopped"`) {
+		t.Errorf("a run stopped on its own should show stopped: %s", row)
+	}
+	postForm(t, mux, "/sequences/"+id+"/stop", nil)
+	waitSequence(t, mux, id, finished)
+}
+
+func TestRunAll_SurvivesTheRequestThatStartedIt(t *testing.T) {
+	db := newTestDB(t)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(20 * time.Millisecond) }))
+	defer target.Close()
+	col := runAllCollection(t, db, target.URL, []string{"a", "b"}, nil)
+	app := httptest.NewServer(web.NewServer(db))
+	defer app.Close()
+
+	// A real round trip: the request context is cancelled once the response is written.
+	resp, err := http.Post(app.URL+"/collections/"+col.ID+"/run-all", "application/x-www-form-urlencoded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	m := sequenceIDRe.FindStringSubmatch(string(b))
+	if m == nil {
+		t.Fatalf("no sequence id: %s", b)
+	}
+	for i := 0; i < 200; i++ {
+		r, err := http.Get(app.URL + "/sequences/" + m[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if finished(string(body)) {
+			if runs, _ := store.ListAllRuns(db); len(runs) != 2 {
+				t.Fatalf("%d runs saved, want 2", len(runs))
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("sequence did not finish after the starting request returned")
 }
