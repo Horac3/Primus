@@ -1,7 +1,9 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,7 +59,7 @@ func TestMigrate_CreatesTablesOnFreshDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate returned error: %v", err)
 	}
-	for _, table := range []string{"requests", "test_configs", "runs", "global_auth"} {
+	for _, table := range []string{"requests", "test_configs", "runs", "global_auth", "insights"} {
 		var name string
 		row := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table)
 		if err := row.Scan(&name); err != nil {
@@ -124,6 +126,27 @@ func TestSaveAndGetRequestDefinition(t *testing.T) {
 	}
 	if got.Headers["Accept"] != "application/json" {
 		t.Errorf("Headers[Accept]: got %q", got.Headers["Accept"])
+	}
+}
+
+func TestSaveAndGetRequestDefinition_KeepsNotes(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	def := model.RequestDefinition{ID: "req-n", Name: "n", Method: "GET", URLTemplate: "https://example.com", Notes: "Read this first."}
+
+	if err := store.SaveRequestDefinition(db, def); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	got, err := store.GetRequestDefinition(db, "req-n")
+	if err != nil {
+		t.Fatalf("GetRequestDefinition: %v", err)
+	}
+
+	if got.Notes != "Read this first." {
+		t.Errorf("Notes: got %q", got.Notes)
 	}
 }
 
@@ -261,6 +284,7 @@ func TestSaveAndGetTestConfig(t *testing.T) {
 		Concurrency:   5,
 		TotalRequests: 100,
 		Assertions:    model.Assertions{ExpectedStatus: []int{200}, MaxP95Millis: 300},
+		PayloadPool:   []json.RawMessage{json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`)},
 	}
 
 	// Act
@@ -284,6 +308,11 @@ func TestSaveAndGetTestConfig(t *testing.T) {
 	}
 	if len(got.Assertions.ExpectedStatus) != 1 || got.Assertions.ExpectedStatus[0] != 200 {
 		t.Errorf("Assertions.ExpectedStatus: got %v", got.Assertions.ExpectedStatus)
+	}
+	if len(got.PayloadPool) != len(want.PayloadPool) ||
+		string(got.PayloadPool[0]) != string(want.PayloadPool[0]) ||
+		string(got.PayloadPool[1]) != string(want.PayloadPool[1]) {
+		t.Errorf("PayloadPool: got %s, want %s", got.PayloadPool, want.PayloadPool)
 	}
 }
 
@@ -399,5 +428,165 @@ func TestListRuns(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Errorf("len: got %d, want 2", len(list))
+	}
+}
+
+func TestInsightLifecycle(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	pending, started, err := store.StartInsight(db, "run-insight", "ollama", "qwen2.5:3b")
+	if err != nil || !started || pending.Status != store.InsightPending {
+		t.Fatalf("StartInsight = %+v, %v, %v; want pending started", pending, started, err)
+	}
+	if _, started, err := store.StartInsight(db, "run-insight", "ollama", "qwen2.5:3b"); err != nil || started {
+		t.Fatalf("duplicate StartInsight started=%v err=%v, want existing pending", started, err)
+	}
+	if err := store.CompleteInsight(db, "run-insight", "ollama", "qwen2.5:3b", "The run completed."); err != nil {
+		t.Fatalf("CompleteInsight: %v", err)
+	}
+	got, err := store.GetInsight(db, "run-insight")
+	if err != nil {
+		t.Fatalf("GetInsight: %v", err)
+	}
+	if got.Status != store.InsightDone || got.Text != "The run completed." || got.Analyzer != "ollama" || got.Model != "qwen2.5:3b" || got.CreatedAt.IsZero() {
+		t.Errorf("completed insight = %+v", got)
+	}
+	if _, started, err := store.StartInsight(db, "run-insight", "rules", "rules-v1"); err != nil || !started {
+		t.Fatalf("StartInsight after completion started=%v err=%v, want regeneration", started, err)
+	}
+}
+
+// All in-process callers share one connection, so they queue in the pool instead of polling SQLite's lock.
+func TestOpenDB_UsesOneConnection(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if got := db.Stats().MaxOpenConnections; got != 1 {
+		t.Errorf("MaxOpenConnections = %d, want 1", got)
+	}
+}
+
+// A write behind a held connection waits for it, then succeeds.
+func TestCompleteInsight_QueuesBehindHeldConnection(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, _, err := store.StartInsight(db, "run-a", "rules", "rules-v1"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			conn.Close()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- store.CompleteInsight(db, "run-a", "rules", "rules-v1", "text") }()
+	select {
+	case err := <-done:
+		t.Fatalf("CompleteInsight returned (%v) while the connection was held, want it queued", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	conn.Close()
+	released = true
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CompleteInsight after release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CompleteInsight still blocked after the connection was released")
+	}
+}
+
+// A write queued behind an open read completes once the read is closed.
+func TestCompleteInsight_QueuesBehindOpenRead(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for _, id := range []string{"run-a", "run-b"} {
+		if _, _, err := store.StartInsight(db, id, "rules", "rules-v1"); err != nil {
+			t.Fatalf("StartInsight %s: %v", id, err)
+		}
+	}
+
+	rows, err := db.Query(`SELECT run_id FROM insights`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("expected a first row: %v", rows.Err())
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- store.CompleteInsight(db, "run-a", "rules", "rules-v1", "text") }()
+	select {
+	case err := <-done:
+		t.Fatalf("CompleteInsight returned (%v) while a read was open, want it queued", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	rows.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CompleteInsight after the read closed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CompleteInsight still blocked after the read closed")
+	}
+}
+
+// A path that already carries query parameters keeps them and still gets the pragmas.
+func TestOpenDB_PathWithQueryKeepsPragmas(t *testing.T) {
+	db, err := store.OpenDB(filepath.Join(t.TempDir(), "test.db") + "?_txlock=deferred")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	var timeout int
+	if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&timeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", timeout)
+	}
+}
+
+func TestFailPendingInsights(t *testing.T) {
+	db, cleanup := tempDB(t)
+	defer cleanup()
+	if err := store.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, _, err := store.StartInsight(db, "run-pending", "rules", "rules-v1"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+	count, err := store.FailPendingInsights(db, "generation interrupted by server restart")
+	if err != nil || count != 1 {
+		t.Fatalf("FailPendingInsights = %d, %v; want 1, nil", count, err)
+	}
+	got, err := store.GetInsight(db, "run-pending")
+	if err != nil {
+		t.Fatalf("GetInsight: %v", err)
+	}
+	if got.Status != store.InsightFailed || got.Error != "generation interrupted by server restart" {
+		t.Errorf("recovered insight = %+v", got)
 	}
 }

@@ -5,14 +5,18 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/Horac3/Primus/internal/seed"
 	"github.com/Horac3/Primus/internal/store"
 	"github.com/Horac3/Primus/internal/web"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
 	if len(os.Args) > 1 && os.Args[1] == "run" {
 		// "primus run <config.json> [--db <path>]"
 		fs := flag.NewFlagSet("run", flag.ExitOnError)
@@ -49,6 +53,11 @@ func main() {
 	if err := store.Migrate(db); err != nil {
 		fmt.Fprintf(os.Stderr, "primus: migrate: %v\n", err)
 		os.Exit(1)
+	}
+
+	// A seed problem (for example a user collection already named "JSONPlaceholder") must not stop the server.
+	if _, err := seed.Ensure(db); err != nil {
+		slog.Warn("built-in examples not seeded", "err", err)
 	}
 
 	mux := web.NewServer(db)

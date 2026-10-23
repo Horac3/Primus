@@ -5,21 +5,11 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Horac3/Primus/internal/model"
 )
-
-// result is a single HTTP call outcome, emitted by each worker.
-type result struct {
-	statusCode int
-	latency    time.Duration
-	err        error
-}
 
 // tuned http.Client scaled to the given concurrency level.
 func newClient(concurrency int) *http.Client {
@@ -28,177 +18,6 @@ func newClient(concurrency int) *http.Client {
 	t.MaxIdleConnsPerHost = concurrency
 	t.IdleConnTimeout = 30 * time.Second
 	return &http.Client{Transport: t}
-}
-
-// ============================================================
-// Public helper: Percentiles
-// ============================================================
-
-// Percentiles returns the p50, p95, and p99 of a slice of millisecond samples.
-// The slice is sorted in place. Returns 0 for all if the slice is empty.
-func Percentiles(samples []int) (p50, p95, p99 int) {
-	if len(samples) == 0 {
-		return 0, 0, 0
-	}
-	sort.Ints(samples)
-	p50 = samples[percentileIdx(len(samples), 50)]
-	p95 = samples[percentileIdx(len(samples), 95)]
-	p99 = samples[percentileIdx(len(samples), 99)]
-	return
-}
-
-// percentileIdx returns the 0-based index for the given percentile.
-func percentileIdx(n, pct int) int {
-	idx := (n*pct+99)/100 - 1
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= n {
-		idx = n - 1
-	}
-	return idx
-}
-
-// ============================================================
-// Public helper: ValidateTestConfig
-// ============================================================
-
-// ValidateTestConfig rejects configs that set both or neither of the two
-// mutually exclusive stop conditions (TotalRequests vs Duration), and
-// non-positive concurrency. Callers must validate before running.
-func ValidateTestConfig(cfg model.TestConfig) error {
-	if cfg.Concurrency < 1 {
-		return fmt.Errorf("concurrency must be >= 1 (got %d)", cfg.Concurrency)
-	}
-	countSet := cfg.TotalRequests > 0
-	durSet := cfg.Duration > 0
-	if countSet == durSet {
-		return fmt.Errorf("set exactly one of total_requests (%d) or duration (%s), not both/neither",
-			cfg.TotalRequests, cfg.Duration)
-	}
-	return nil
-}
-
-// ============================================================
-// Public helper: CheckAssertions
-// ============================================================
-
-// CheckAssertions returns one AssertionResult per configured assertion.
-// Entries mirror EvaluateAssertions item-by-item; the overall pass/fail
-// (including the 100%-failure baseline) stays with DetermineOutcome.
-func CheckAssertions(a model.Assertions, s model.RunSummary) []model.AssertionResult {
-	var out []model.AssertionResult
-	if len(a.ExpectedStatus) > 0 {
-		allowed := make(map[int]bool, len(a.ExpectedStatus))
-		for _, code := range a.ExpectedStatus {
-			allowed[code] = true
-		}
-		passed := len(s.StatusCounts) > 0
-		for code := range s.StatusCounts {
-			if !allowed[code] {
-				passed = false
-				break
-			}
-		}
-		names := make([]string, 0, len(a.ExpectedStatus))
-		for _, code := range a.ExpectedStatus {
-			names = append(names, strconv.Itoa(code))
-		}
-		out = append(out, model.AssertionResult{
-			Name:   "Status code: " + strings.Join(names, ", "),
-			Passed: passed,
-		})
-	}
-	if a.MaxP95Millis > 0 {
-		out = append(out, model.AssertionResult{
-			Name:   fmt.Sprintf("Latency (p95) < %dms", a.MaxP95Millis),
-			Passed: !(s.P95Millis > a.MaxP95Millis),
-		})
-	}
-	if a.MaxErrorRate > 0 {
-		out = append(out, model.AssertionResult{
-			Name:   "Error rate < " + strconv.FormatFloat(a.MaxErrorRate*100, 'f', -1, 64) + "%",
-			Passed: !(s.ErrorRate > a.MaxErrorRate),
-		})
-	}
-	return out
-}
-
-// ============================================================
-// Public helper: Bucketize
-// ============================================================
-
-// Bucketize counts samples into the fixed model.LatencyBucketEdges buckets
-// plus a final >= last-edge overflow bucket. Counts sum to len(samples).
-func Bucketize(samples []int) []int {
-	edges := model.LatencyBucketEdges
-	buckets := make([]int, len(edges)+1)
-	for _, s := range samples {
-		placed := false
-		for i, e := range edges {
-			if s < e {
-				buckets[i]++
-				placed = true
-				break
-			}
-		}
-		if !placed {
-			buckets[len(buckets)-1]++
-		}
-	}
-	return buckets
-}
-
-// ============================================================
-// Public helper: EvaluateAssertions
-// ============================================================
-
-// EvaluateAssertions returns true if all configured assertions hold.
-// Baseline rule: if 100% of requests failed (ErrorRate==1.0 and no successful
-// status codes recorded), it always returns false regardless of configured assertions.
-func EvaluateAssertions(a model.Assertions, s model.RunSummary) bool {
-	// Baseline: 100% failure is always a fail.
-	if s.ErrorRate >= 1.0 && len(s.StatusCounts) == 0 {
-		return false
-	}
-	// Error rate
-	if a.MaxErrorRate > 0 && s.ErrorRate > a.MaxErrorRate {
-		return false
-	}
-	// P95
-	if a.MaxP95Millis > 0 && s.P95Millis > a.MaxP95Millis {
-		return false
-	}
-	// Expected status codes
-	if len(a.ExpectedStatus) > 0 {
-		allowed := make(map[int]bool, len(a.ExpectedStatus))
-		for _, code := range a.ExpectedStatus {
-			allowed[code] = true
-		}
-		for code := range s.StatusCounts {
-			if !allowed[code] {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// DetermineOutcome returns the tri-state RunOutcome for a completed run.
-func DetermineOutcome(a model.Assertions, s model.RunSummary) model.RunOutcome {
-	// Baseline: 100% failure overrides everything.
-	if s.ErrorRate >= 1.0 && len(s.StatusCounts) == 0 {
-		return model.OutcomeFailNoRequests
-	}
-	// No assertions configured and at least one success → neutral.
-	hasAssertions := a.MaxErrorRate > 0 || a.MaxP95Millis > 0 || len(a.ExpectedStatus) > 0
-	if !hasAssertions {
-		return model.OutcomeNoAssertions
-	}
-	if EvaluateAssertions(a, s) {
-		return model.OutcomePass
-	}
-	return model.OutcomeFail
 }
 
 // ProbeResult is the outcome of a single test-connection request.
@@ -210,15 +29,16 @@ type ProbeResult struct {
 	ErrMsg      string `json:"err_msg,omitempty"`
 }
 
-// applyAuth injects the global auth credentials — unless the request
-// already carries that header (explicit per-endpoint override wins).
+// applyAuth injects the run's auth credentials — global auth, or one
+// worker's credential-pool token — unless the request already carries
+// that header (explicit per-endpoint override wins).
 func applyAuth(req *http.Request, auth model.AuthConfig) {
 	switch auth.Type {
 	case model.AuthTypeBearer:
 		if auth.Token != "" && req.Header.Get("Authorization") == "" {
 			req.Header.Set("Authorization", "Bearer "+auth.Token)
 		}
-	case model.AuthTypeAPIKey:
+	case model.AuthTypeAPIKey, model.AuthTypeCredentialPool:
 		if auth.Header != "" && auth.Value != "" && req.Header.Get(auth.Header) == "" {
 			req.Header.Set(auth.Header, auth.Value)
 		}
@@ -299,196 +119,13 @@ func randomString(n int) string {
 	return string(b)
 }
 
-// ============================================================
-// Internal: job feeder and worker pool
-// ============================================================
-
-// stopPredicate reports whether the run is complete: duration-based when
-// cfg.Duration > 0, count-based otherwise (exactly one is always set;
-// see ValidateTestConfig).
-func stopPredicate(cfg model.TestConfig, start time.Time, sent int) bool {
-	if cfg.Duration > 0 {
-		return time.Since(start) >= cfg.Duration
-	}
-	return sent >= cfg.TotalRequests
-}
-
-// feed sends job tokens until the stop predicate holds, then closes the
-// channel. When a BurstPattern is set, jobs are released in pulses of
-// Count with Idle ms between them; otherwise as fast as workers drain.
-// Respects ctx cancellation.
-func feed(ctx context.Context, jobs chan<- struct{}, cfg model.TestConfig, start time.Time) {
-	defer close(jobs)
-	sent := 0
-	for !stopPredicate(cfg, start, sent) {
-		select {
-		case <-ctx.Done():
-			return
-		case jobs <- struct{}{}:
-			sent++
-		}
-		// Burst pacing: idle between pulses, never after the final one.
-		if cfg.BurstPattern != nil && cfg.BurstPattern.Count > 0 &&
-			sent%cfg.BurstPattern.Count == 0 && !stopPredicate(cfg, start, sent) {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Duration(cfg.BurstPattern.Idle) * time.Millisecond):
-			}
-		}
-	}
-}
-
-// runWorkers launches concurrency workers, each pulling from jobs and sending
-// results to results. Closes results when all workers finish.
-func runWorkers(
-	ctx context.Context,
-	req model.RequestDefinition,
-	auth model.AuthConfig,
-	jobs <-chan struct{},
-	results chan<- result,
-	concurrency int,
-	client *http.Client,
-) {
-	var wg sync.WaitGroup
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				r := execRequest(ctx, client, req, auth)
-				select {
-				case results <- r:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-}
-
-// execRequest builds and fires one HTTP request, returning a result.
-func execRequest(ctx context.Context, client *http.Client, def model.RequestDefinition, auth model.AuthConfig) result {
-	url := def.URLTemplate
-	// Resolve dynamic query params into URL query string
-	if len(def.QueryParams) > 0 {
-		resolved := ResolveParams(def.QueryParams)
-		params := make([]string, 0, len(resolved))
-		for k, v := range resolved {
-			// Path params: substitute {name} placeholders
-			placeholder := "{" + k + "}"
-			if strings.Contains(url, placeholder) {
-				url = strings.ReplaceAll(url, placeholder, v)
-			} else {
-				params = append(params, k+"="+v)
-			}
-		}
-		if len(params) > 0 {
-			url += "?" + strings.Join(params, "&")
-		}
-	}
-
-	var bodyReader *strings.Reader
-	method := def.Method
-	if method == "" {
-		method = "GET"
-	}
-	if def.Body != nil && len(def.Body.Raw) > 0 {
-		bodyReader = strings.NewReader(string(def.Body.Raw))
-	}
-
-	var req *http.Request
-	var err error
-	if bodyReader != nil {
-		req, err = http.NewRequestWithContext(ctx, method, url, bodyReader)
-	} else {
-		req, err = http.NewRequestWithContext(ctx, method, url, nil)
-	}
-	if err != nil {
-		return result{err: err}
-	}
-
-	// Per-endpoint header overrides ride along verbatim — except the
-	// [GLOBAL] sentinel, which explicitly defers to global auth below.
-	for k, v := range def.Headers {
-		if v == model.HeaderGlobalSentinel {
-			continue
-		}
-		req.Header.Set(k, v)
-	}
-
-	// Global auth, applied at dispatch time (skips headers already set above).
-	applyAuth(req, auth)
-
-	start := time.Now()
-	resp, err := client.Do(req)
-	latency := time.Since(start)
-	if err != nil {
-		return result{latency: latency, err: err}
-	}
-	resp.Body.Close()
-	return result{statusCode: resp.StatusCode, latency: latency}
-}
-
-// aggregate consumes all results and builds a RunSummary plus the latency
-// bucket histogram. Buckets cover completed responses; transport errors
-// have no latency sample.
-func aggregate(results <-chan result, assertions model.Assertions, start time.Time) (model.RunSummary, []int) {
-	statusCounts := make(map[int]int)
-	var latencies []int
-	var errorCount int
-	total := 0
-
-	allowed := make(map[int]bool, len(assertions.ExpectedStatus))
-	for _, code := range assertions.ExpectedStatus {
-		allowed[code] = true
-	}
-
-	for r := range results {
-		total++
-		if r.err != nil {
-			errorCount++
-			continue
-		}
-		statusCounts[r.statusCode]++
-		latencies = append(latencies, int(r.latency.Milliseconds()))
-
-		// Count unexpected status codes as errors for error-rate purposes
-		if len(allowed) > 0 && !allowed[r.statusCode] {
-			errorCount++
-		}
-	}
-
-	p50, p95, p99 := Percentiles(latencies)
-	var errorRate float64
-	if total > 0 {
-		errorRate = float64(errorCount) / float64(total)
-	}
-
-	return model.RunSummary{
-		StatusCounts:  statusCounts,
-		ErrorCount:    errorCount,
-		P50Millis:     p50,
-		P95Millis:     p95,
-		P99Millis:     p99,
-		ErrorRate:     errorRate,
-		TotalRequests: total,
-	}, Bucketize(latencies)
-}
-
-// buildRun assembles the final Run from a summary.
-func buildRun(cfg model.TestConfig, summary model.RunSummary, checks []model.AssertionResult, buckets []int, startedAt, finishedAt time.Time) model.Run {
+func buildRun(cfg model.TestConfig, summary model.RunSummary, checks []model.AssertionResult, buckets []int, startedAt, finishedAt time.Time, series []model.Point) model.Run {
 	outcome := DetermineOutcome(cfg.Assertions, summary)
 	return model.Run{
 		ID:               fmt.Sprintf("run-%d", startedAt.UnixNano()),
 		TestConfigID:     cfg.ID,
+		Mode:             cfg.Mode,
+		Concurrency:      cfg.Concurrency,
 		StartedAt:        startedAt,
 		FinishedAt:       finishedAt,
 		Summary:          summary,
@@ -496,6 +133,7 @@ func buildRun(cfg model.TestConfig, summary model.RunSummary, checks []model.Ass
 		Passed:           outcome == model.OutcomePass,
 		AssertionResults: checks,
 		LatencyBuckets:   buckets,
+		TimeSeries:       series,
 	}
 }
 
@@ -507,11 +145,44 @@ func buildRun(cfg model.TestConfig, summary model.RunSummary, checks []model.Ass
 // predicate holds — a fixed TotalRequests count, or a Duration deadline
 // (exactly one must be set; see ValidateTestConfig). Burst pacing applies
 // when cfg.BurstPattern is set. Returns the aggregated Run.
-func Run(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
+func RunWithSnapshot(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig, snapshot *atomic.Pointer[[]model.Point]) (model.Run, error) {
+	return RunWithPool(ctx, req, cfg, auth, nil, snapshot)
+}
+
+// RunWithPool is RunWithSnapshot with an optional credential pool. When
+// pool is non-nil, a login phase runs before measurement starts: each
+// worker logs in as its own credential and sends that token instead of
+// global auth. Workers whose login failed are excluded; when no login
+// succeeds the run returns OutcomeFailNoLogins without dispatching.
+func RunWithPool(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig, pool *model.CredentialPool, snapshot *atomic.Pointer[[]model.Point]) (model.Run, error) {
 	if err := ValidateTestConfig(cfg); err != nil {
 		return model.Run{}, err
 	}
+	if pool != nil {
+		if err := ValidatePool(cfg, *pool); err != nil {
+			return model.Run{}, err
+		}
+	}
 
+	client := newClient(cfg.Concurrency)
+	defer client.CloseIdleConnections()
+
+	workers := make([]workerAuth, cfg.Concurrency)
+	for i := range workers {
+		workers[i] = workerAuth{auth: auth}
+	}
+	var logins *poolLogins
+	if pool != nil {
+		logins = newPoolLogins(client, *pool)
+		workers = logins.loginWorkers(ctx, cfg.Concurrency)
+		if len(workers) == 0 || ctx.Err() != nil {
+			run := loginAbortedRun(cfg, logins.summary(), len(workers))
+			run.Stopped = ctx.Err() != nil
+			return run, nil
+		}
+	}
+
+	// Measurement starts only now, after every login has finished.
 	runCtx := ctx
 	if cfg.Duration > 0 {
 		var cancel context.CancelFunc
@@ -519,19 +190,70 @@ func Run(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig,
 		defer cancel()
 	}
 
-	client := newClient(cfg.Concurrency)
-	buf := cfg.Concurrency
-	if cfg.BurstPattern != nil && cfg.BurstPattern.Count > buf {
-		buf = cfg.BurstPattern.Count
-	}
-	jobs := make(chan struct{}, buf)
 	results := make(chan result, cfg.Concurrency)
-
 	startedAt := time.Now()
-	go feed(runCtx, jobs, cfg, startedAt)
-	runWorkers(runCtx, req, auth, jobs, results, cfg.Concurrency, client)
+	feedDone := make(chan struct{})
+	// Written by the rate scheduler goroutine, read after feedDone closes.
+	var dropped int
+	var scheduled time.Duration
+	if cfg.Mode == model.ModeRate {
+		// The workers left after logins cap the requests in flight: each
+		// holds a slot from release until its result is delivered. Sizing
+		// by cfg.Concurrency would queue jobs when some logins failed.
+		slots := make(chan struct{}, len(workers))
+		jobs := make(chan time.Time, len(workers))
+		go func() {
+			defer close(feedDone)
+			dropped = schedule(runCtx, jobs, slots, cfg.TargetRate, startedAt, startedAt.Add(cfg.Duration))
+			// The window is the whole duration unless the run was cut
+			// short; schedule itself returns at the last due time.
+			scheduled = cfg.Duration
+			if runCtx.Err() != nil {
+				scheduled = min(time.Since(startedAt), cfg.Duration)
+			}
+		}()
+		runScheduledWorkers(runCtx, req, workers, cfg.PayloadPool, jobs, slots, results, client)
+	} else {
+		buf := cfg.Concurrency
+		if cfg.MaxRate > 0 {
+			// Unbuffered: a release is the moment a worker takes the job, so
+			// MaxRate bounds dispatch, not just queueing.
+			buf = 0
+		}
+		if cfg.BurstPattern != nil && cfg.BurstPattern.Count > buf {
+			buf = cfg.BurstPattern.Count
+		}
+		jobs := make(chan struct{}, buf)
+		go func() {
+			defer close(feedDone)
+			feed(runCtx, jobs, cfg, startedAt)
+		}()
+		runWorkers(runCtx, req, workers, cfg.PayloadPool, jobs, results, client)
+	}
 
-	summary, buckets := aggregate(results, cfg.Assertions, startedAt)
+	summary, buckets, series := aggregate(results, cfg.Assertions, startedAt, snapshot)
 	finishedAt := time.Now()
-	return buildRun(cfg, summary, CheckAssertions(cfg.Assertions, summary), buckets, startedAt, finishedAt), nil
+	// Workers exit on cancel without draining jobs, so feed may still be
+	// in a send or burst-idle select; it returns on runCtx.Done.
+	<-feedDone
+	if cfg.Mode == model.ModeRate {
+		summary.Dropped = dropped
+		summary.TargetRate = cfg.TargetRate
+		if secs := scheduled.Seconds(); secs > 0 {
+			summary.AchievedRate = float64(summary.TotalRequests+summary.Cancelled) / secs
+		}
+	}
+	run := buildRun(cfg, summary, CheckAssertions(cfg.Assertions, summary), buckets, startedAt, finishedAt, series)
+	// Stopped: the caller cancelled before the run's own stop condition. A
+	// count run that already fired every request finished, even if a Stop
+	// raced in afterwards; a Duration deadline lives on runCtx, not ctx.
+	run.Stopped = ctx.Err() != nil && !(cfg.TotalRequests > 0 && summary.TotalRequests >= cfg.TotalRequests)
+	if logins != nil {
+		run.Login = logins.summary()
+	}
+	return run, nil
+}
+
+func Run(ctx context.Context, req model.RequestDefinition, cfg model.TestConfig, auth model.AuthConfig) (model.Run, error) {
+	return RunWithSnapshot(ctx, req, cfg, auth, nil)
 }

@@ -31,3 +31,10 @@ like this:
 
 Use it for the one endpoint that needs a different token without
 disturbing everything else.
+
+## Credential pools
+
+To simulate many users instead of one shared identity, activate a
+[credential pool](credential-pools.md) in the auth bar. An active pool
+replaces global auth for runs. Each worker logs in as its own account, and
+a `[GLOBAL]` header row then receives that worker's token.

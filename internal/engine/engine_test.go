@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -53,7 +54,7 @@ func TestEvaluateAssertions_TableDriven(t *testing.T) {
 		{
 			name:       "no assertions always passes",
 			assertions: model.Assertions{},
-			summary:    model.RunSummary{ErrorRate: 0.5, P95Millis: 9999},
+			summary:    model.RunSummary{StatusCounts: map[int]int{200: 1}, ErrorCount: 1, ErrorRate: 0.5, P95Millis: 9999},
 			wantPassed: true,
 		},
 		{
@@ -151,6 +152,43 @@ func TestResolveParams_RandomIntVariesAndStaysInBounds(t *testing.T) {
 	// Assert values vary (with 50 samples and range 1-100, collision probability is very low)
 	if len(seen) < 5 {
 		t.Errorf("only %d distinct values in 50 samples — values are not varying", len(seen))
+	}
+}
+
+func TestRunCyclesPayloadPoolAcrossRequests(t *testing.T) {
+	// Arrange
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]int
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request body: %v", err)
+			return
+		}
+		bodies = append(bodies, fmt.Sprint(body["sample"]))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	req := model.RequestDefinition{
+		ID: "payload-test", Method: http.MethodPost, URLTemplate: srv.URL,
+		Body: &model.BodyTemplate{Raw: []byte(`{"sample":0}`)},
+	}
+	cfg := model.TestConfig{
+		ID: "payload-cycle", RequestID: req.ID, Mode: model.ModeLoad, Concurrency: 1, TotalRequests: 5,
+		PayloadPool: []json.RawMessage{json.RawMessage(`{"sample":1}`), json.RawMessage(`{"sample":2}`)},
+		Assertions:  model.Assertions{ExpectedStatus: []int{http.StatusOK}},
+	}
+
+	// Act
+	_, err := engine.Run(context.Background(), req, cfg, model.AuthConfig{})
+
+	// Assert
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"1", "2", "1", "2", "1"}
+	if fmt.Sprint(bodies) != fmt.Sprint(want) {
+		t.Fatalf("request bodies = %v, want %v", bodies, want)
 	}
 }
 

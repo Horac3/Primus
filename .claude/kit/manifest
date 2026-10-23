@@ -1,0 +1,42 @@
+# claude-kit manifest: written by install.sh, used by --update. Do not edit.
+version=1.4.0
+stack=go
+pm=pnpm
+frontend=1
+kit	355f8520bb0b528f	.claude/agents/debugger.md
+kit	e73005ad592352a0	.claude/agents/researcher.md
+kit	7a3d5469e7561d94	.claude/agents/reviewer.md
+kit	f9726e42d4e53718	.claude/agents/test-runner.md
+kit	081a14320de560f8	.claude/hooks/guard-bash.sh
+kit	ec0006d3d6dacfe1	.claude/hooks/guard-files.sh
+kit	346de9443a9b7769	.claude/hooks/lib.sh
+kit	c484bd4e38da0f11	.claude/hooks/session-context.sh
+kit	0a21ddd5b86bb323	.claude/kit/check.sh
+kit	3e2e2f15ce1f0684	.claude/kit/context.sh
+kit	be65af312e6ee8e9	.claude/kit/statusline.sh
+kit	f0cfdf375e7d6364	.claude/rules/kit/docker.md
+kit	113153949e474a08	.claude/rules/kit/hexagonal.md
+kit	4e2ff88b6ed10465	.claude/rules/kit/model-routing.md
+kit	4bc05f2e94bcfa84	.claude/rules/kit/working-rules.md
+kit	72e232561cea166a	.claude/skills/commit/SKILL.md
+kit	91d9aa432c203d76	.claude/skills/decide/SKILL.md
+kit	810ed9db8d380b3a	.claude/skills/fix/SKILL.md
+kit	27f6b47774b9239a	.claude/skills/handoff/SKILL.md
+kit	56633b026c37350d	.claude/skills/kickoff/SKILL.md
+kit	4aa77db85b4f1bea	.claude/skills/kickoff/existing.md
+kit	05edec9fe6619314	.claude/skills/next/SKILL.md
+kit	1bfeb01a0a63160a	.claude/skills/remap/SKILL.md
+kit	c72d56c841ab2a32	.claude/skills/review/SKILL.md
+kit	28f7584503c8c480	.claude/skills/tdd/SKILL.md
+kit	f9e0967fdf665b77	.claude/rules/kit/go.md
+kit	afd912483ac86c91	.claude/agents/ui-checker.md
+kit	140001b3db60cd1f	.claude/kit/design-pack.sh
+kit	967dabe7fe8468d4	.claude/kit/shot.mjs
+kit	a03047834443acbf	.claude/rules/kit/frontend.md
+kit	71c53f652c4ac45f	.claude/skills/ui/SKILL.md
+proj	dce658f8ba4b079a	CLAUDE.md
+proj	6c16ca08386fedd4	docs/progress.md
+proj	8b4943932b6793a1	docs/decisions.md
+proj	0976eaeb86e5d817	docs/requirements.md
+proj	d4f1909ffa29db38	.claude/settings.json
+proj	e8318a63e65560e5	.claude/kit/commands.env

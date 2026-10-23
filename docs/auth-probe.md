@@ -16,13 +16,32 @@ Does the account lock after N bad passwords, and does it unlock?
   failures. Retrying — slowly or not — keeps failing until something
   resets it. Don't confuse the two when reading results.
 
-## Current status: basic support
+## Fields
 
-Today `auth_probe` is a mode value that runs a steady test (same engine
-path as [load](load.md)) with global auth attached. There are **no**
-dedicated attempt-count, request-rate, or per-credential fields yet —
-attempt count is `total_requests`, pacing is "as fast as `concurrency`
-workers can go":
+Pick **Auth probe** as the mode. The panel then shows:
+
+- **Attempts** — how many requests to fire (`total_requests`).
+- **Max attempts per second** (`max_rate`, optional) — a ceiling on how
+  fast attempts are released: each attempt goes out at least
+  1 ÷ `max_rate` seconds after the previous one. After a slow response
+  Primus does not "catch up" with a burst, so a rate limiter never sees
+  more than `max_rate`. It is not a target. Each attempt also waits for a
+  free worker, so the rate you reach is at most `max_rate` *and* at most
+  concurrency ÷ latency. Leave it empty for no cap (as fast as
+  `concurrency` workers can go). The smallest cap is 0.001 (one attempt
+  per ~17 minutes). Only auth-probe accepts it, and not together with a
+  `burst_pattern`; open-loop fixed-rate load is a separate, planned mode.
+- **Send as** (`auth_source`) — which identity the attempts carry:
+
+| Value | Identity |
+|---|---|
+| *(empty)* | The active [credential pool](credential-pools.md) if one is set, otherwise [global auth](global-auth.md). |
+| `global` | Global auth, even when a pool is active. |
+| `pool` | The active credential pool. The run is rejected if no pool is active. |
+| `none` | No auth at all. A header set to `[GLOBAL]` is left out. |
+
+The running line names the identity ("global auth", "no auth", or the
+pool's name). Stop ends the run promptly, even mid-wait.
 
 ```json
 {
@@ -31,16 +50,25 @@ workers can go":
   "mode": "auth_probe",
   "concurrency": 2,
   "total_requests": 20,
+  "max_rate": 2,
+  "auth_source": "global",
   "assertions": {
     "expected_status": [200, 429]
   }
 }
 ```
 
-Set global auth first (see [global-auth](global-auth.md)) — without it the
-probe fires unauthenticated, which usually just measures the login page's
-401 rate. Listing both 200 and 429 as expected keeps rate-limited responses
-from failing the run, so you can read the 200-vs-429 split in the status
-counts instead.
+This sends 20 attempts with global auth, no faster than 2 per second
+(about 10 seconds). Listing both 200 and 429 as expected keeps
+rate-limited responses from failing the run, so you can read the
+200-vs-429 split in the status counts instead. Without `expected_status`,
+a 401 counts as a completed request, not an error.
 
-Dedicated rate/credential fields and lockout-aware reporting are roadmap.
+To find the rate where `429`s start, repeat the probe with a rising
+`max_rate`. To check lockout, point the probe at a test account's login
+endpoint with a wrong password in the request body, then probe again
+slowly with the right one: if it still fails, the account is locked,
+not rate-limited.
+
+Lockout-aware reporting (for example "first 429 at attempt N") is on
+the roadmap.

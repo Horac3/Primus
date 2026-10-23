@@ -15,6 +15,25 @@ Set exactly one — the run is rejected otherwise. In the web UI, load is
 duration-driven (default 30 s); `total_requests` configs still work via the
 CLI and JSON.
 
+## Collections and `{{base_url}}`
+
+Every endpoint belongs to one **collection**, a named group. Open the
+**Collections** panel from the sidebar to create, rename or delete them. Endpoints
+saved before collections existed are in a collection called **My endpoints**.
+
+A collection can have a **base URL**. An endpoint URL that starts with
+`{{base_url}}` (for example `{{base_url}}/posts/1`) takes that base URL at probe
+and run time, so changing the base URL points the whole group at another
+host. The endpoint keeps the `{{base_url}}` text; only the request that is sent
+uses the resolved URL. If the collection has no base URL, the probe or run is
+refused with a message saying so. The placeholder is only recognised at the
+very start of the URL.
+
+Deleting a collection removes its endpoints, their saved test configs, runs and
+insights, after a prompt that shows the counts. It is refused while any run in the
+collection is active; stop the run first. Credential pools are not part of a
+collection and are not touched.
+
 ## Other fields
 
 | Field | Type | Default | Meaning |
@@ -55,3 +74,51 @@ Duration-based equivalent (60 s): replace `"total_requests": 20` with
   ≥600 ms). Bars scale to the tallest bucket. Only completed responses
   are bucketed; transport errors have no latency sample.
 - **Checklist** — one row per configured assertion (✓ PASSED / ✗ FAILED).
+
+## Fixed-rate mode (`"mode": "rate"`)
+
+Plain load is closed-loop: each worker waits for its response before
+sending the next request, so throughput is concurrency ÷ latency. A server
+that slows down therefore receives *less* traffic, and the latency you see
+leaves out the time real users would have spent waiting. Fixed-rate mode is
+open-loop: requests go out on a schedule, whether or not earlier ones have
+answered.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `mode` | `"rate"` | — | Selects fixed-rate mode. |
+| `target_rate` | number ≥ 0.01 | UI default 50 | Requests per second to release. Required in this mode, rejected in every other. |
+| `duration` | int > 0, **nanoseconds** | UI default 30 s | Required; `total_requests` is not accepted here. |
+| `concurrency` | int ≥ 1 | UI default 5 | **The most requests in flight at once**, not a rate. With a [credential pool](credential-pools.md), accounts whose login failed lower this cap. |
+
+How it runs:
+
+- Request *n* is due at `start + n / target_rate`. The schedule is fixed at
+  the start, so it never drifts.
+- A request that is due while `concurrency` requests are already in flight
+  is **dropped**: never sent, counted in `dropped`, never skipped silently.
+  Raise `concurrency` to at least `target_rate × expected latency (s)` so a
+  healthy server has room.
+- Latency is measured from each request's **scheduled** send time, so any
+  delay in sending it counts as latency instead of being hidden.
+- `burst_pattern` and `max_rate` cannot be combined with it.
+- Stop works as in the other modes: requests still in flight are
+  `cancelled`, not errors.
+
+The result adds **Target rate**, **Achieved rate** (requests released per
+second of the run's duration, or of the time until Stop) and **Dropped**. Any drop fails the run with
+`✗ FAILED — target rate not sustained` (outcome `fail_rate_not_sustained`),
+even when no assertions are configured: the server could not take the
+requested rate within the in-flight cap.
+
+```json
+{
+  "id": "cfg-rate-demo",
+  "request_id": "findPetsByStatus",
+  "mode": "rate",
+  "target_rate": 500,
+  "concurrency": 100,
+  "duration": 15000000000,
+  "assertions": { "max_p95_millis": 300 }
+}
+```

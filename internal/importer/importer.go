@@ -15,22 +15,55 @@ import (
 	"github.com/Horac3/Primus/internal/model"
 )
 
-// ImportFromURL fetches a spec from url and delegates to ImportFromBytes.
-func ImportFromURL(ctx context.Context, url string) ([]model.RequestDefinition, error) {
+// DefaultTitle names the collection of a spec whose info.title is blank.
+const DefaultTitle = "Imported API"
+
+// Spec is a parsed spec: the title the importer names a collection from, and its operations.
+type Spec struct {
+	Title string
+	Defs  []model.RequestDefinition
+}
+
+// FetchSpec fetches a spec from url and delegates to ParseSpec.
+func FetchSpec(ctx context.Context, url string) (Spec, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("importer: build request: %w", err)
+		return Spec{}, fmt.Errorf("importer: build request: %w", err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("importer: fetch %q: %w", url, err)
+		return Spec{}, fmt.Errorf("importer: fetch %q: %w", url, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("importer: read body: %w", err)
+		return Spec{}, fmt.Errorf("importer: read body: %w", err)
 	}
-	return ImportFromBytes(data)
+	return ParseSpec(data)
+}
+
+// ParseSpec parses a Swagger 2.0 or OpenAPI 3.x spec and returns its title and one
+// RequestDefinition per operation. Returns an error for malformed or structurally invalid
+// specs; Defs is an empty (non-nil) slice for specs with no operations.
+func ParseSpec(data []byte) (Spec, error) {
+	doc, err := loadDoc(data)
+	if err != nil {
+		return Spec{}, err
+	}
+	title := DefaultTitle
+	if doc.Info != nil && strings.TrimSpace(doc.Info.Title) != "" {
+		title = strings.TrimSpace(doc.Info.Title)
+	}
+	return Spec{Title: title, Defs: extractDefinitions(doc)}, nil
+}
+
+// ImportFromURL fetches a spec from url and returns its operations.
+func ImportFromURL(ctx context.Context, url string) ([]model.RequestDefinition, error) {
+	spec, err := FetchSpec(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	return spec.Defs, nil
 }
 
 // ImportFromBytes parses a Swagger 2.0 or OpenAPI 3.x spec and returns one
@@ -38,11 +71,11 @@ func ImportFromURL(ctx context.Context, url string) ([]model.RequestDefinition, 
 // structurally invalid specs; returns an empty (non-nil) slice for specs
 // with no operations.
 func ImportFromBytes(data []byte) ([]model.RequestDefinition, error) {
-	doc, err := loadDoc(data)
+	spec, err := ParseSpec(data)
 	if err != nil {
 		return nil, err
 	}
-	return extractDefinitions(doc), nil
+	return spec.Defs, nil
 }
 
 // loadDoc detects swagger 2.0 vs openapi 3.x and returns a validated *openapi3.T.

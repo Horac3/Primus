@@ -3,12 +3,27 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: primus:latest
+    image: primus:0.1.0-beta.1
     ports:
       - "8080:8080"
     volumes:
       - primus-data:/data
+    environment:
+      # rules unless set: PRIMUS_ANALYZER=ollama docker compose --profile ai up
+      PRIMUS_ANALYZER: ${PRIMUS_ANALYZER:-rules}
+      PRIMUS_LLM_URL: http://ollama:11434
+      PRIMUS_LLM_MODEL: qwen2.5:3b
     restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    profiles:
+      - ai
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
 
 volumes:
   primus-data:
+  ollama-models:

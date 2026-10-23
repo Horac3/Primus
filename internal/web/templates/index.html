@@ -67,10 +67,14 @@ details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 
   <div id="auth-bar" hx-get="/auth-fragment" hx-trigger="load" hx-swap="innerHTML">
     <span class="muted">loading auth…</span>
   </div>
+  <!-- Credential pool manager, opened from the auth bar -->
+  <div id="pool-panel"></div>
+  <!-- Collection manager, opened from the sidebar -->
+  <div id="collections-panel"></div>
 
   <div class="layout">
     <!-- Sidebar: every endpoint + import, loaded once -->
-    <aside id="sidebar" hx-get="/sidebar-fragment" hx-trigger="load" hx-swap="innerHTML">
+    <aside id="sidebar" hx-get="/sidebar-fragment" hx-trigger="load, collections-changed from:body" hx-swap="innerHTML">
       <span class="muted">loading endpoints…</span>
     </aside>
 
@@ -81,7 +85,20 @@ details summary { cursor:pointer; color:#3b82d4; font-size:.88rem; margin:.5rem 
   </div>
 
   <h2>History</h2>
-  <div id="history" hx-get="/history-fragment" hx-trigger="load" hx-swap="innerHTML">
+  <form hx-get="/history-fragment" hx-target="#history" hx-swap="innerHTML" hx-indicator="#history-query-busy"
+        style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
+    <label for="history-query" class="muted" style="align-self:center">Ask
+      <span id="history-query-busy" class="htmx-indicator">· searching…</span></label>
+    <input id="history-query" type="text" name="q" maxlength="500"
+           placeholder="e.g. failed burst runs last week" style="flex:1 1 12rem;min-width:0">
+    <button type="submit">Search</button>
+  </form>
+  <form hx-post="/history/clear" hx-target="next .slot" hx-swap="innerHTML" style="margin-bottom:.5rem">
+    <input type="hidden" name="scope" value="all">
+    <button type="submit" class="secondary">Clear all history</button>
+  </form>
+  <div class="slot"></div>
+  <div id="history" hx-get="/history-fragment" hx-trigger="load, history-changed from:body" hx-swap="innerHTML">
     <span class="muted">loading history…</span>
   </div>
 
@@ -95,6 +112,110 @@ function toggleMode() {
   document.getElementById('fields-count').style.display = count ? '' : 'none';
   document.querySelectorAll('#fields-duration input').forEach(i => i.disabled = count);
   document.querySelectorAll('#fields-count input').forEach(i => i.disabled = !count);
+  const probe = m === 'auth_probe';
+  document.getElementById('count-label').textContent = probe ? 'Attempts' : 'Total requests';
+  document.getElementById('fields-burst').style.display = m === 'burst' ? '' : 'none';
+  document.querySelectorAll('#fields-burst input').forEach(i => i.disabled = m !== 'burst');
+  document.getElementById('fields-probe').style.display = probe ? '' : 'none';
+  document.getElementById('fields-rate').style.display = m === 'rate' ? '' : 'none';
+  document.querySelectorAll('#fields-rate input').forEach(i => i.disabled = m !== 'rate');
+  document.querySelectorAll('#fields-probe input, #fields-probe select').forEach(i => i.disabled = !probe);
+}
+
+async function generateRequestDefinition() {
+  const description = document.getElementById('nl-request-description').value.trim();
+  const status = document.getElementById('nl-request-status');
+  const confidence = document.getElementById('nl-request-confidence');
+  const form = document.getElementById('panel-form');
+  if (!description) {
+    status.textContent = 'Describe the request first.';
+    return;
+  }
+  status.textContent = 'Generating…';
+  confidence.textContent = '';
+  try {
+    const response = await fetch('/nl/request', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({description})
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const suggestion = await response.json();
+    const field = name => form.elements.namedItem(name);
+    const previousID = field('request_id').value;
+    field('request_id').value = suggestion.matched_existing_id || '';
+    field('request_name').value = suggestion.matched_existing_id === previousID
+      ? field('request_name').value : '';
+    field('method').value = suggestion.method;
+    field('url').value = suggestion.url;
+    field('body').value = suggestion.body;
+    field('headers_json').value = JSON.stringify(suggestion.headers, null, 2);
+    field('authz_override').value = suggestion.headers.Authorization || '';
+    confidence.textContent = suggestion.confidence_note;
+    status.textContent = 'Fields filled for review. Nothing has been saved or tested.';
+  } catch (error) {
+    status.textContent = error.message || 'Request generation failed.';
+  }
+}
+
+async function generateTestConfig(requestID) {
+  const description = document.getElementById('nl-testconfig-description').value.trim();
+  const status = document.getElementById('nl-testconfig-status');
+  const reasoning = document.getElementById('nl-testconfig-reasoning');
+  const form = document.getElementById('panel-form');
+  if (!description) {
+    status.textContent = 'Describe the test first.';
+    return;
+  }
+  status.textContent = 'Generating…';
+  reasoning.textContent = '';
+  try {
+    const response = await fetch('/nl/testconfig', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({request_id: requestID, description})
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const suggestion = await response.json();
+    const field = name => form.elements.namedItem(name);
+    field('mode').value = suggestion.mode;
+    field('mode').dispatchEvent(new Event('change'));
+    field('concurrency').value = suggestion.concurrency;
+    if (suggestion.duration_seconds !== undefined) {
+      field('duration_seconds').value = suggestion.duration_seconds;
+    }
+    if (suggestion.total_requests !== undefined) {
+      field('total_requests').value = suggestion.total_requests;
+    }
+    reasoning.textContent = suggestion.reasoning;
+    status.textContent = 'Fields filled for review. Nothing has been saved or run.';
+  } catch (error) {
+    status.textContent = error.message || 'Test config generation failed.';
+  }
+}
+
+async function generatePayloads(requestID) {
+  const count = Number(document.getElementById('payload-count').value);
+  const status = document.getElementById('payload-status');
+  const pool = document.getElementById('payload-pool');
+  if (!Number.isInteger(count) || count < 1) {
+    status.textContent = 'Enter a positive number of payload variants.';
+    return;
+  }
+  pool.value = '[]';
+  status.textContent = 'Generating…';
+  try {
+    const response = await fetch(`/requests/${encodeURIComponent(requestID)}/payloads/generate?count=${encodeURIComponent(count)}`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    pool.value = JSON.stringify(result.payloads);
+    const cappedNote = result.capped ? ` (capped from ${result.requested_count} to ${result.generated_count})` : '';
+    status.textContent = `Generated ${result.generated_count} payload variants${cappedNote}. They will cycle during a run only after you submit the form.`;
+  } catch (error) {
+    status.textContent = error.message || 'Payload generation failed.';
+  }
 }
 </script>
 </body>

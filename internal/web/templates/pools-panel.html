@@ -1,0 +1,199 @@
+{{- /* pools-panel.html — fragment: credential pool manager. Target: #pool-panel */ -}}
+<div class="card" data-testid="pools-panel">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <strong>👥 Credential pools</strong>
+    <button type="button" class="secondary" onclick="document.getElementById('pool-panel').innerHTML=''">Close</button>
+  </div>
+  <p class="muted">Each worker logs in once as its own account before measurement starts, then sends its own token.
+    The accounts must exist on the target before a run: import existing ones, or create new ones with
+    "Provision accounts" below. <a href="/docs/credential-pools" style="color:#3b82d4">How pools work</a></p>
+
+  {{with .Message}}<p class="verdict-pass">{{.}}</p>{{end}}
+
+  {{with .Provision}}
+  {{if .Running}}
+  <div class="card" data-testid="provision-running" hx-get="/pools/provision/{{.JobID}}/status?pool={{.PoolID}}"
+       hx-trigger="every 1s" hx-target="#pool-panel" hx-swap="innerHTML">
+    <span class="muted">Provisioning accounts on the target…</span>
+    <button type="button" class="secondary" hx-post="/pools/provision/{{.JobID}}/stop?pool={{.PoolID}}"
+            hx-target="#pool-panel" hx-swap="innerHTML">Stop</button>
+  </div>
+  {{else}}{{with .Result}}
+  <div class="card" data-testid="provision-result">
+    {{with .Summary}}
+    <p><strong>Created {{.Succeeded}} of {{.Attempted}} accounts</strong>
+      <span class="muted">· {{.Failed}} failed · {{.Cancelled}} cancelled</span></p>
+    {{if .FailureReasons}}
+    <table>
+      <thead><tr><th>Reason</th><th>Count</th></tr></thead>
+      <tbody>{{range .FailureReasons}}<tr><td>{{.Cause}}</td><td>{{.Count}}</td></tr>{{end}}</tbody>
+    </table>
+    {{end}}
+    {{end}}
+    {{if .Stored}}<p class="verdict-pass">{{.Stored}} account(s) saved to {{.PoolName}}.
+      {{if .NewPool}}Set its login URL under "Login step" before using it for runs.{{end}}</p>{{end}}
+    {{with .SaveErr}}<p class="verdict-fail">{{.}}</p>{{end}}
+  </div>
+  {{end}}{{end}}
+  {{end}}
+
+  {{with .Import}}
+  <div style="margin:.5rem 0">
+    <p><span class="verdict-pass">Imported {{.Count}} credentials.</span>
+      {{if .Errors}}<span class="verdict-fail">{{len .Errors}} row(s) skipped.</span>{{end}}
+      {{if .Warnings}}<span class="muted">{{len .Warnings}} warning(s).</span>{{end}}</p>
+    {{if or .Errors .Warnings}}
+    <table>
+      <thead><tr><th>Row</th><th>Problem</th></tr></thead>
+      <tbody>
+      {{range .Errors}}<tr><td>Row {{.Row}}</td><td class="verdict-fail">{{.Reason}}</td></tr>{{end}}
+      {{range .Warnings}}<tr><td>Row {{.Row}}</td><td class="muted">{{.Reason}}</td></tr>{{end}}
+      </tbody>
+    </table>
+    {{end}}
+  </div>
+  {{end}}
+
+  {{if .Pools}}
+  <div class="row" style="margin:.5rem 0">
+    {{range .Pools}}
+    <button type="button" class="secondary" hx-get="/pools-fragment?id={{.ID}}" hx-target="#pool-panel" hx-swap="innerHTML">
+      {{.Name}} ({{.Count}}){{if eq .ID $.ActiveID}} · active{{end}}
+    </button>
+    {{end}}
+  </div>
+  {{end}}
+
+  <details {{if not .Pools}}open{{end}}>
+    <summary>Import a pool (CSV or JSON)</summary>
+    <form hx-post="/pools/import" hx-encoding="multipart/form-data" hx-target="#pool-panel" hx-swap="innerHTML">
+      <div class="row">
+        <label><span>Pool name</span><input type="text" name="name" placeholder="shop users" required></label>
+        <label><span>File (.csv with a header row, or .json array of objects)</span>
+          <input type="file" name="file" accept=".csv,.json,text/csv,application/json"></label>
+      </div>
+      <label><span>…or paste the content</span>
+        <textarea name="content" rows="4" placeholder="username,password&#10;alice,s3cret"></textarea></label>
+      <p class="muted">Up to 10,000 rows. Fields are free-form: username, password, email, client_id, client_secret, …</p>
+      <button type="submit">Import</button>
+    </form>
+  </details>
+
+  <details>
+    <summary>Provision accounts (sign up new ones on the target)</summary>
+    <form hx-post="/pools/provision" hx-target="#pool-panel" hx-swap="innerHTML">
+      <p class="muted">Sends one sign-up request per account, then saves the ones that succeed (HTTP 2xx) into a pool.
+        Accounts stay on the target: Primus cannot delete them, verify emails or solve captchas.
+        <strong>Only run this against a system you may create test accounts on.</strong></p>
+      <div class="row">
+        <label><span>Add to pool</span>
+          <select name="existing_pool_id">
+            <option value="">New pool…</option>
+            {{range .Pools}}<option value="{{.ID}}" {{if and $.Selected (eq .ID $.Selected.ID)}}selected{{end}}>{{.Name}} ({{.Count}})</option>{{end}}
+          </select></label>
+        <label><span>New pool name</span><input type="text" name="name" placeholder="fresh users"></label>
+        <label style="flex:0 0 110px"><span>Accounts</span><input type="number" min="1" name="count" value="10" required></label>
+        <label style="flex:0 0 140px"><span>Concurrency</span><input type="number" min="1" name="concurrency" value="5"></label>
+      </div>
+      <label><span>Account fields, one per line</span>
+        <textarea name="fields" rows="3">{{"email=user{{seq}}@example.test"}}
+{{"password={{secret}}"}}</textarea></label>
+      <p class="muted">Generated for each account: {{"{{seq}}"}} counts 1, 2, 3… and {{"{{secret}}"}} is a random password.</p>
+      <div class="row">
+        <label style="flex:0 0 100px"><span>Method</span><input type="text" name="signup_method" value="POST"></label>
+        <label><span>Sign-up URL</span><input type="url" name="signup_url" placeholder="https://api.example.com/auth/register" required></label>
+      </div>
+      <label><span>Headers (JSON object)</span><input type="text" name="signup_headers" value='{"Content-Type":"application/json"}'></label>
+      <label><span>Body (use the field names as {{"{{field}}"}} placeholders)</span>
+        <textarea name="signup_body" rows="3">{{"{"}}"email":"{{"{{email}}"}}","password":"{{"{{password}}"}}"{{"}"}}</textarea></label>
+      <strong>Keep a value from the response</strong> <span class="muted">— optional, e.g. the new user's id</span>
+      <div class="row">
+        <label><span>Save as field</span><input type="text" name="extract_field" placeholder="user_id"></label>
+        <label style="flex:0 0 120px"><span>From</span>
+          <select name="extract_from"><option value="body">JSON body</option><option value="header">Header</option></select></label>
+        <label><span>Path (data.id) or header name</span><input type="text" name="extract_path"></label>
+        <label style="flex:0 0 140px"><span>Strip prefix</span><input type="text" name="extract_prefix"></label>
+      </div>
+      <button type="submit">Provision accounts</button>
+    </form>
+  </details>
+
+  {{with .Selected}}
+  <h2>{{.Name}} <span class="muted">· {{len .Credentials}} credentials</span></h2>
+  <table>
+    <thead><tr><th>#</th>{{range $.Fields}}<th>{{.}}</th>{{end}}</tr></thead>
+    <tbody>
+    {{range $i, $c := $.Preview}}
+    <tr><td>{{inc $i}}</td>{{range $.Fields}}<td>{{index $c .}}</td>{{end}}</tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{if gt (len .Credentials) (len $.Preview)}}<p class="muted">Showing the first {{len $.Preview}}.</p>{{end}}
+
+  <form hx-post="/pools/{{.ID}}/masking" hx-target="#pool-panel" hx-swap="innerHTML" style="margin-top:.75rem">
+    <fieldset>
+      <legend><strong>Masked fields</strong> <span class="muted">— hidden everywhere except the login request itself</span></legend>
+      <div class="row">
+        {{range $.Fields}}
+        <label style="flex:0 0 auto"><input type="checkbox" name="mask" value="{{.}}" {{if index $.Masked .}}checked{{end}}> Mask this value: <code>{{.}}</code></label>
+        {{end}}
+      </div>
+    </fieldset>
+    <button type="submit" class="secondary">Save masked fields</button>
+  </form>
+
+  <form hx-post="/pools/{{.ID}}/spec" hx-target="#pool-panel" hx-swap="innerHTML" style="margin-top:.75rem">
+    <strong>Login step</strong> <span class="muted">— use {{"{{field}}"}} placeholders from the columns above</span>
+    <div class="row">
+      <label style="flex:0 0 100px"><span>Method</span><input type="text" name="login_method" value="{{.Login.Method}}"></label>
+      <label><span>Login URL</span><input type="url" name="login_url" value="{{.Login.URL}}" placeholder="https://api.example.com/auth/login" required></label>
+    </div>
+    <label><span>Headers (JSON object)</span><input type="text" name="login_headers_json" value="{{$.HeadersJSON}}"></label>
+    <label><span>Body</span><textarea name="login_body" rows="3">{{.Login.Body}}</textarea></label>
+    <strong>Extract the token</strong>
+    <div class="row">
+      <label style="flex:0 0 120px"><span>From</span>
+        <select name="extract_from">
+          <option value="body" {{if eq .Login.Extraction.From "body"}}selected{{end}}>JSON body</option>
+          <option value="header" {{if eq .Login.Extraction.From "header"}}selected{{end}}>Header</option>
+        </select></label>
+      <label><span>Path (data.access_token) or header name</span><input type="text" name="extract_path" value="{{.Login.Extraction.Path}}" required></label>
+      <label style="flex:0 0 140px"><span>Strip prefix</span><input type="text" name="extract_prefix" value="{{.Login.Extraction.Prefix}}" placeholder="Bearer "></label>
+    </div>
+    <strong>Send it on every request</strong>
+    <div class="row">
+      <label><span>Header</span><input type="text" name="apply_header" value="{{.Apply.Header}}" placeholder="Authorization"></label>
+      <label><span>Format</span><input type="text" name="apply_format" value="{{.Apply.Format}}" placeholder="Bearer {{"{{token}}"}}"></label>
+      <label style="flex:0 0 140px"><span>Login concurrency</span><input type="number" min="1" name="login_concurrency" value="{{.LoginConcurrency}}"></label>
+    </div>
+    <div class="row" style="margin:.4rem 0">
+      <label style="flex:0 0 auto"><input type="checkbox" name="allow_reuse" {{if .AllowReuse}}checked{{end}}> Allow credential reuse (fewer accounts than workers)</label>
+      <label style="flex:0 0 auto"><input type="checkbox" name="relogin_on_401" {{if .ReloginOn401}}checked{{end}}> Re-login once on 401</label>
+    </div>
+    <button type="submit">Save login settings</button>
+  </form>
+
+  <form hx-post="/pools/{{.ID}}/test-login" hx-target="#pool-test-login" hx-swap="innerHTML" class="row" style="margin-top:.75rem">
+    <label style="flex:0 0 220px"><span>Test login as</span>
+      <select name="index">
+        {{range $i, $c := $.Preview}}<option value="{{$i}}">#{{inc $i}} {{or (index $c "username") (index $c "email")}}</option>{{end}}
+      </select></label>
+    <button type="submit" class="secondary">Test login</button>
+  </form>
+  <div id="pool-test-login"></div>
+
+  <form hx-post="/pools/active" hx-target="#auth-bar" hx-swap="innerHTML" style="margin-top:.5rem">
+    <input type="hidden" name="pool_id" value="{{.ID}}">
+    <button type="submit" {{if eq .ID $.ActiveID}}disabled{{end}}>{{if eq .ID $.ActiveID}}Active for runs{{else}}Use this pool for runs{{end}}</button>
+  </form>
+  {{end}}
+</div>
+
+{{define "pool-test-login"}}
+<div class="card" data-testid="pool-test-login">
+  {{if .Outcome.Success}}<span class="verdict-pass">✓ Logged in</span>{{else}}<span class="verdict-fail">✗ Login failed</span>{{end}}
+  <span class="muted">HTTP {{.Outcome.StatusCode}} · {{.LatencyMs}} ms</span>
+  {{with .Outcome.ErrorClass}}<div class="verdict-fail" style="overflow-wrap:anywhere">{{.}}</div>{{end}}
+  {{with .MaskedToken}}<div>Extracted token: <code>{{.}}</code></div>{{end}}
+</div>
+{{end}}

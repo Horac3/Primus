@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Primus run {{.ID}}</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:system-ui,"Segoe UI",sans-serif; max-width:720px; margin:2rem auto; padding:0 1rem; color:#1f2328; background:#fff; font-size:14px; line-height:1.6; }
+h1 { font-size:1.3rem; margin-bottom:.5rem; }
+.badge-pass    { background:#d1fae5; color:#065f46; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+.badge-fail    { background:#fee2e2; color:#991b1b; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+.badge-neutral { background:#e0f2fe; color:#0c4a6e; padding:3px 10px; border-radius:4px; font-weight:600; display:inline-block; }
+table { border-collapse:collapse; width:100%; font-size:.88rem; margin-top:.5rem; }
+th, td { text-align:left; padding:.35rem .6rem; border-bottom:1px solid #e5e7eb; }
+th { background:#f7f8fa; }
+.muted { color:#57606a; font-size:.85rem; }
+section { margin-top:1.25rem; }
+h2 { font-size:.92rem; font-weight:600; color:#57606a; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.4rem; border-bottom:1px solid #e5e7eb; padding-bottom:.2rem; }
+.hist { display:flex; align-items:flex-end; gap:3px; height:110px; padding:.5rem;
+        background:#f7f8fa; border:1px solid #e5e7eb; border-radius:4px; margin-top:.5rem; }
+.hbar { flex:0 0 20px; background:#3b82d4; border-radius:2px 2px 0 0; min-height:2px; }
+.verdict-pass { color:#065f46; font-weight:600; }
+.verdict-fail { color:#991b1b; font-weight:600; }
+</style>
+</head>
+<body>
+<h1>Primus run report</h1>
+<p class="muted">{{.ID}}</p>
+<p class="muted">{{.Endpoint}}</p>
+<p class="muted">{{.Mode}} &middot; concurrency {{.Concurrency}} &middot; started {{.StartedAt.UTC.Format "2006-01-02 15:04:05 UTC"}} &middot; finished {{.FinishedAt.UTC.Format "2006-01-02 15:04:05 UTC"}} &middot; {{reportDuration .Run}}</p>
+
+<p style="margin-top:.75rem">
+  <span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span>
+  {{if .Stopped}}&nbsp;<span class="muted">⏹ Stopped early</span>{{end}}
+</p>
+{{template "cancelled-note" .}}
+
+<section>
+<h2>Latency</h2>
+<table>
+  <tr><th>P50</th><td>{{.Summary.P50Millis}} ms</td></tr>
+  <tr><th>P95</th><td>{{.Summary.P95Millis}} ms</td></tr>
+  <tr><th>P99</th><td>{{.Summary.P99Millis}} ms</td></tr>
+</table>
+</section>
+
+{{if .Summary.TargetRate}}
+<section>
+<h2>Rate</h2>
+<table>
+  <tr><th>Target rate</th><td>{{printf "%g" .Summary.TargetRate}}/s</td></tr>
+  <tr><th>Achieved rate</th><td>{{printf "%.1f" .Summary.AchievedRate}}/s</td></tr>
+  <tr><th>Dropped</th><td>{{.Summary.Dropped}}</td></tr>
+</table>
+</section>
+{{end}}
+
+<section>
+<h2>Status codes</h2>
+<table>
+  <thead><tr><th>Code</th><th>Count</th></tr></thead>
+  <tbody>
+  {{range $code,$count := .Summary.StatusCounts}}
+  <tr><td>{{$code}}</td><td>{{$count}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</section>
+
+<section>
+<h2>Errors</h2>
+<table>
+  <tr><th>Error count</th><td>{{.Summary.ErrorCount}}</td></tr>
+  <tr><th>Error rate</th><td>{{printf "%.2f%%" (mul .Summary.ErrorRate 100.0)}}</td></tr>
+  <tr><th>Requests</th><td>{{.Summary.TotalRequests}}</td></tr>
+  <tr><th>Requests/sec</th><td>{{requestsPerSec .Run}}</td></tr>
+</table>
+{{if .Summary.ErrorDetails}}
+<table>
+  <thead><tr><th>Failure cause</th><th>Count</th></tr></thead>
+  <tbody>
+  {{range .Summary.ErrorDetails}}
+  <tr><td style="overflow-wrap:anywhere">{{redact .Cause}}</td><td>{{.Count}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+</section>
+
+{{if .AssertionResults}}
+<section>
+<h2>Assertions</h2>
+<table>
+  <thead><tr><th>Assertion</th><th>Result</th></tr></thead>
+  <tbody>
+  {{range .AssertionResults}}
+  <tr><td>{{.Name}}</td><td>{{if .Passed}}<span class="verdict-pass">✓ PASSED</span>{{else}}<span class="verdict-fail">✗ FAILED</span>{{end}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</section>
+{{end}}
+
+{{template "login-summary" .Run}}
+{{if .TimeSeries}}
+<section>
+<h2>Time series</h2>
+{{template "timeseries" .}}
+</section>
+{{end}}
+
+{{if .LatencyBuckets}}
+<section>
+<h2>Latency buckets (ms)</h2>
+{{template "histogram" .}}
+<table>
+  <thead><tr><th>Bucket</th><th>Count</th></tr></thead>
+  <tbody>
+  {{range $i,$c := .LatencyBuckets}}
+  <tr><td>{{bucketLabel $i}}</td><td>{{$c}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</section>
+{{end}}
+
+<section>
+<h2>Insight</h2>
+{{if and .Insight (eq .Insight.Status "done")}}
+<p><strong>via {{.Insight.Analyzer}}{{if .Insight.Model}} ({{.Insight.Model}}){{end}}</strong></p>
+{{if .Sections}}
+{{if .Sections.FallbackFrom}}<p class="muted">Written by the rules analyzer because {{analyzerName .Sections.FallbackFrom}} failed or gave an answer that did not match the run's numbers.</p>{{end}}
+<h3>What the numbers say</h3>
+<ul>{{range .Sections.Numbers}}<li>{{redact .}}</li>{{end}}</ul>
+<h3>Likely causes</h3>
+<ul>{{range .Sections.Causes}}<li>{{redact .}}</li>{{end}}</ul>
+<h3>What to try next</h3>
+<ul>{{range .Sections.NextSteps}}<li>{{redact .}}</li>{{end}}</ul>
+{{if .Sections.Comparison}}
+<h3>Compared with the previous run</h3>
+<ul>{{range .Sections.Comparison}}<li>{{redact .}}</li>{{end}}</ul>
+{{end}}
+{{else}}
+<p>{{redact .Insight.Text}}</p>
+{{end}}
+{{else}}
+<p class="muted">No insight generated.</p>
+{{end}}
+</section>
+
+{{template "report-key" (readingKey .Login)}}
+</body>
+</html>

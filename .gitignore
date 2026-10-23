@@ -10,6 +10,7 @@ tmp/
 # Environment files
 .env
 *.env
+!.claude/kit/commands.env
 
 # Node (should never appear, but just in case)
 node_modules/
@@ -20,3 +21,10 @@ Thumbs.db
 
 # Agent working instructions — internal planning, not part of the public repo
 /agent_instructions/
+/docs/internal/
+.bob/
+bob_sessions/
+.claude/settings.local.json
+.claude/kit/logs/
+CLAUDE.local.md
+*.kit-new

@@ -1,16 +1,21 @@
 package web_test
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Horac3/Primus/internal/author"
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
 	"github.com/Horac3/Primus/internal/web"
@@ -174,7 +179,10 @@ func TestRunsHandler_AllFailed_ZeroAssertions_RunPassedFalse(t *testing.T) {
 
 	// Act — start async, poll to completion
 	id := postRuns(t, mux, form)
-	pollDone(t, mux, id)
+	body := pollDone(t, mux, id)
+	if !strings.Contains(body, "Run insight") || !strings.Contains(body, "No assertions were configured") {
+		t.Errorf("completed run card missing rules insight; body: %s", body)
+	}
 
 	// Assert — persisted run is never a green PASS
 	runs, err := store.ListAllRuns(db)
@@ -445,9 +453,12 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 		TestConfigID: "cfg-x",
 		StartedAt:    now,
 		FinishedAt:   now.Add(time.Second),
-		Summary:      model.RunSummary{StatusCounts: map[int]int{200: 10}},
-		Outcome:      model.OutcomePass,
-		Passed:       true,
+		Summary: model.RunSummary{
+			StatusCounts: map[int]int{200: 10},
+			ErrorDetails: []model.ErrorDetail{{Cause: "connection refused", Count: 2}},
+		},
+		Outcome: model.OutcomePass,
+		Passed:  true,
 	}
 	if err := store.SaveRun(db, run); err != nil {
 		t.Fatalf("SaveRun: %v", err)
@@ -466,6 +477,208 @@ func TestGetRunHandler_KnownID_Returns200(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "run-known") {
 		t.Errorf("body does not contain run ID; body: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "connection refused") || !strings.Contains(rr.Body.String(), "Failure cause") {
+		t.Errorf("run page does not show failure cause details; body: %s", rr.Body.String())
+	}
+}
+
+func TestRunInsightAsyncLifecycleAndReuse(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var calls atomic.Int32
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"content":"{\"headline\":\"Run finished\",\"explanation\":\"The recorded requests completed.\",\"next_steps\":[\"Review the result.\"]}"}}`))
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+	t.Setenv("PRIMUS_LLM_TIMEOUT", "2s")
+
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-insight", TestConfigID: "cfg-x", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	mux := web.NewServer(db)
+	post := httptest.NewRequest(http.MethodPost, "/runs/run-insight/insights", nil)
+	postResponse := httptest.NewRecorder()
+	mux.ServeHTTP(postResponse, post)
+	if postResponse.Code != http.StatusOK || !strings.Contains(postResponse.Body.String(), "Generating...") || !strings.Contains(postResponse.Body.String(), `hx-trigger="every 2s"`) {
+		t.Fatalf("POST insight response = %d %s", postResponse.Code, postResponse.Body.String())
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("analyzer was not called")
+	}
+	pending := httptest.NewRecorder()
+	mux.ServeHTTP(pending, httptest.NewRequest(http.MethodGet, "/runs/run-insight/insights", nil))
+	if !strings.Contains(pending.Body.String(), "Generating...") || !strings.Contains(pending.Body.String(), `hx-trigger="every 2s"`) {
+		t.Fatalf("GET pending insight = %d %s", pending.Code, pending.Body.String())
+	}
+
+	duplicate := httptest.NewRecorder()
+	mux.ServeHTTP(duplicate, httptest.NewRequest(http.MethodPost, "/runs/run-insight/insights", nil))
+	select {
+	case <-started:
+		t.Fatal("duplicate POST started a second analyzer")
+	default:
+	}
+
+	unblock()
+	deadline := time.Now().Add(2 * time.Second)
+	var finalBody string
+	for time.Now().Before(deadline) {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/run-insight/insights", nil))
+		finalBody = response.Body.String()
+		if strings.Contains(finalBody, "Run finished") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(finalBody, "via ollama") || !strings.Contains(finalBody, "test-model") || strings.Contains(finalBody, `hx-trigger="every 2s"`) {
+		t.Fatalf("final insight fragment = %s", finalBody)
+	}
+
+	page := httptest.NewRecorder()
+	mux.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/runs/run-insight", nil))
+	if !strings.Contains(page.Body.String(), "Run finished") || !strings.Contains(page.Body.String(), "via ollama") || !strings.Contains(page.Body.String(), "test-model") {
+		t.Fatalf("reopened run page did not reuse insight: %s", page.Body.String())
+	}
+	if calls.Load() != 1 {
+		t.Errorf("analyzer calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestRunInsightDisplaysRulesFallbackAnalyzer(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"message":{"content":"{\"headline\":\"Uptime was 87.65 percent\",\"explanation\":\"The run was successful.\",\"next_steps\":[\"Review the run.\"]}"}}`))
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+	t.Setenv("PRIMUS_LLM_TIMEOUT", "2s")
+
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-rules-fallback", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	// Act
+	post := httptest.NewRecorder()
+	mux.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/runs/run-rules-fallback/insights", nil))
+	deadline := time.Now().Add(2 * time.Second)
+	var finalBody string
+	for time.Now().Before(deadline) {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/run-rules-fallback/insights", nil))
+		finalBody = response.Body.String()
+		if strings.Contains(finalBody, "via rules") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Assert
+	if post.Code != http.StatusOK || !strings.Contains(post.Body.String(), "Generating...") {
+		t.Fatalf("POST insight response = %d %s", post.Code, post.Body.String())
+	}
+	if !strings.Contains(finalBody, "via rules") || !strings.Contains(finalBody, "No assertions were configured") {
+		t.Fatalf("fallback insight fragment = %s", finalBody)
+	}
+}
+
+func TestRunInsightFailsWhenCompletionCannotBeSaved(t *testing.T) {
+	// Arrange: the completion UPDATE aborts, as a write that still cannot get the lock would.
+	t.Setenv("PRIMUS_ANALYZER", "rules")
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-lost-write", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER abort_insight_done BEFORE UPDATE ON insights WHEN NEW.status = 'done'
+		BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	mux := web.NewServer(db)
+
+	// Act
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/runs/run-lost-write/insights", nil))
+	deadline := time.Now().Add(2 * time.Second)
+	var got store.InsightRecord
+	for time.Now().Before(deadline) {
+		var err error
+		got, err = store.GetInsight(db, "run-lost-write")
+		if err == nil && got.Status != store.InsightPending {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Assert
+	if got.Status != store.InsightFailed || got.Error == "" {
+		t.Fatalf("insight after a failed completion write = %+v, want failed with an error", got)
+	}
+	fragment := httptest.NewRecorder()
+	mux.ServeHTTP(fragment, httptest.NewRequest(http.MethodGet, "/runs/run-lost-write/insights", nil))
+	if !strings.Contains(fragment.Body.String(), "could not be saved") {
+		t.Errorf("fragment does not show the save failure: %s", fragment.Body.String())
+	}
+	if strings.Contains(fragment.Body.String(), `hx-trigger="every 2s"`) {
+		t.Errorf("fragment still polls after a failed completion write: %s", fragment.Body.String())
+	}
+}
+
+func TestRunInsightStartupMarksPendingFailed(t *testing.T) {
+	db := newTestDB(t)
+	if _, _, err := store.StartInsight(db, "run-orphan", "rules", "rules-v1"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+	_ = web.NewServer(db)
+	got, err := store.GetInsight(db, "run-orphan")
+	if err != nil {
+		t.Fatalf("GetInsight: %v", err)
+	}
+	if got.Status != store.InsightFailed {
+		t.Fatalf("pending insight status = %q, want failed", got.Status)
+	}
+}
+
+func TestGetFailedInsightHasFinalFragmentAndMetadata(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	if err := store.SaveRun(db, model.Run{ID: "run-failed-insight", StartedAt: now, FinishedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	if _, _, err := store.StartInsight(db, "run-failed-insight", "ollama", "qwen2.5:3b"); err != nil {
+		t.Fatalf("StartInsight: %v", err)
+	}
+	if err := store.FailInsight(db, "run-failed-insight", "ollama", "qwen2.5:3b", "model unavailable"); err != nil {
+		t.Fatalf("FailInsight: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	web.NewServer(db).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/runs/run-failed-insight/insights", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "ollama") || !strings.Contains(rr.Body.String(), "qwen2.5:3b") || !strings.Contains(rr.Body.String(), "model unavailable") {
+		t.Fatalf("failed insight response = %d %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `hx-trigger="every 2s"`) {
+		t.Error("failed insight fragment should not poll")
 	}
 }
 
@@ -540,6 +753,50 @@ func TestAuthHandler_SaveAndRenderMasked(t *testing.T) {
 	}
 	if !strings.Contains(rr2.Body.String(), "1234") {
 		t.Errorf("auth-fragment missing saved state; body: %s", rr2.Body.String())
+	}
+}
+
+func TestAuthFragment_BasicCredentialsVisibleOnlyForBasic(t *testing.T) {
+	// Arrange
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	cases := []struct {
+		authType model.AuthType
+		visible  bool
+	}{
+		{authType: model.AuthTypeNone, visible: false},
+		{authType: model.AuthTypeBearer, visible: false},
+		{authType: model.AuthTypeAPIKey, visible: false},
+		{authType: model.AuthTypeBasic, visible: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.authType), func(t *testing.T) {
+			if err := store.SaveGlobalAuth(db, model.AuthConfig{Type: tc.authType}); err != nil {
+				t.Fatalf("SaveGlobalAuth: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/auth-fragment", nil)
+			rr := httptest.NewRecorder()
+
+			// Act
+			mux.ServeHTTP(rr, req)
+
+			// Assert
+			body := rr.Body.String()
+			for _, field := range []string{"auth_username", "auth_password"} {
+				position := strings.Index(body, `name="`+field+`"`)
+				if position < 0 {
+					t.Errorf("fragment missing %s field", field)
+					continue
+				}
+				labelStart := strings.LastIndex(body[:position], "<label")
+				label := body[labelStart:position]
+				hidden := strings.Contains(label, "hidden")
+				if hidden == tc.visible {
+					t.Errorf("%s hidden = %v, want visible = %v; label: %s", field, hidden, tc.visible, label)
+				}
+			}
+		})
 	}
 }
 
@@ -997,6 +1254,9 @@ func TestGetRunHandler_HistogramBarHeights(t *testing.T) {
 	if !strings.Contains(body, "height:50px") {
 		t.Errorf("missing half-height bar; body: %s", body)
 	}
+	if !strings.Contains(body, "Latency distribution") {
+		t.Errorf("missing histogram label; body: %s", body)
+	}
 }
 
 // ============================================================
@@ -1039,8 +1299,8 @@ func TestImportHandler_URLSpec_RefreshesSidebarAndLoadsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRequestDefinitions: %v", err)
 	}
-	if len(defs) != 1 || defs[0].ID != "listPets" {
-		t.Errorf("stored defs = %+v, want [listPets]", defs)
+	if len(defs) != 1 || defs[0].Name != "listPets" {
+		t.Errorf("stored defs = %+v, want one endpoint named listPets", defs)
 	}
 }
 
@@ -1134,3 +1394,434 @@ func TestNav_DocsLinkVisibleFromShell(t *testing.T) {
 
 // keep JSON import for compile check
 var _ = json.Marshal
+
+func TestPostNLRequestMatchesOnlyProvidedEndpointOrExplicitNew(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Ollama request: %v", err)
+			return
+		}
+		var input author.RequestPrompt
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil {
+			t.Errorf("decode prompt: %v", err)
+			return
+		}
+		if len(input.Endpoints) != 2 || input.Endpoints[1] != (author.Endpoint{
+			ID: "ep-login", Name: "User login", Method: "POST", URL: "https://api.example.com/login",
+		}) {
+			t.Errorf("endpoint context = %+v, want endpoint metadata only", input.Endpoints)
+		}
+		var content string
+		if strings.Contains(strings.ToLower(input.Description), "login") {
+			content = `{"matched_existing_id":"ep-login","method":"GET","url":"https://invented.example/path","headers":{"Content-Type":"application/json"},"body":"{\"password\":\"wrong\"}","confidence_note":"Matched User login."}`
+		} else {
+			content = `{"matched_existing_id":null,"method":"POST","url":"https://api.example.com/invoices","headers":{},"body":"{}","confidence_note":"No invoice endpoint matches; this is a new target."}`
+		}
+		response, err := json.Marshal(map[string]any{"message": map[string]string{"content": content}})
+		if err != nil {
+			t.Errorf("marshal Ollama response: %v", err)
+			return
+		}
+		_, _ = w.Write(response)
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+
+	db := newTestDB(t)
+	for _, def := range []model.RequestDefinition{
+		{ID: "ep-login", Name: "User login", Method: "POST", URLTemplate: "https://api.example.com/login", Body: &model.BodyTemplate{Raw: []byte(`{"username":"x"}`)}},
+		{ID: "ep-health", Name: "Health", Method: "GET", URLTemplate: "https://api.example.com/health", Headers: map[string]string{"X-private": "must-not-be-sent"}},
+	} {
+		if err := store.SaveRequestDefinition(db, def); err != nil {
+			t.Fatalf("SaveRequestDefinition: %v", err)
+		}
+	}
+	mux := web.NewServer(db)
+	tests := []struct {
+		name           string
+		description    string
+		wantID         string
+		wantMethod     string
+		wantURL        string
+		wantConfidence string
+	}{
+		{
+			name: "clearly matches endpoint", description: "Test the login endpoint with a wrong password",
+			wantID: "ep-login", wantMethod: "POST", wantURL: "https://api.example.com/login",
+			wantConfidence: "Matched User login.",
+		},
+		{
+			name: "falls through to new endpoint", description: "Create a new invoice endpoint",
+			wantMethod: "POST", wantURL: "https://api.example.com/invoices",
+			wantConfidence: "No invoice endpoint matches; this is a new target.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			payload, err := json.Marshal(map[string]string{"description": tt.description})
+			if err != nil {
+				t.Fatalf("marshal input: %v", err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/nl/request", bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// Act
+			mux.ServeHTTP(response, request)
+
+			// Assert
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var got author.RequestSuggestion
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode suggestion: %v", err)
+			}
+			if got.Method != tt.wantMethod || got.URL != tt.wantURL || got.ConfidenceNote != tt.wantConfidence {
+				t.Errorf("suggestion = %+v, want method %s URL %s note %q", got, tt.wantMethod, tt.wantURL, tt.wantConfidence)
+			}
+			if tt.wantID == "" {
+				if got.MatchedExistingID != nil {
+					t.Errorf("MatchedExistingID = %q, want null", *got.MatchedExistingID)
+				}
+			} else if got.MatchedExistingID == nil || *got.MatchedExistingID != tt.wantID {
+				t.Errorf("MatchedExistingID = %v, want %q", got.MatchedExistingID, tt.wantID)
+			}
+			if got.MatchedExistingID != nil && got.URL != "https://api.example.com/login" &&
+				got.URL != "https://api.example.com/health" {
+				t.Errorf("matched URL %q was not in endpoint list", got.URL)
+			}
+		})
+	}
+	definitions, err := store.ListRequestDefinitions(db)
+	if err != nil {
+		t.Fatalf("ListRequestDefinitions: %v", err)
+	}
+	if len(definitions) != 2 {
+		t.Errorf("generation persisted endpoint definitions: got %d, want the original 2", len(definitions))
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(configs) != 0 || len(runs) != 0 {
+		t.Errorf("generation persisted configs/runs: %d/%d, want none", len(configs), len(runs))
+	}
+}
+
+func TestRequestPanelHidesNaturalLanguageControlsWithoutOllama(t *testing.T) {
+	// Arrange
+	t.Setenv("PRIMUS_ANALYZER", "rules")
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+		ID: "ep-body", Name: "Body endpoint", Method: "POST", URLTemplate: "https://api.example.com/body",
+		Body: &model.BodyTemplate{Raw: []byte(`{"name":"example"}`)},
+	}); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	mux := web.NewServer(db)
+	request := httptest.NewRequest(http.MethodGet, "/requests/ep-body", nil)
+	response := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(response, request)
+
+	// Assert
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "Generate from description") ||
+		strings.Contains(response.Body.String(), "Generate test config") ||
+		strings.Contains(response.Body.String(), "Generate sample data") {
+		t.Errorf("NL authoring controls should be hidden when Ollama is not selected: %s", response.Body.String())
+	}
+}
+
+func TestPostGeneratePayloadsCapsCountAndDoesNotPersist(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Ollama request: %v", err)
+			return
+		}
+		var input struct {
+			Template json.RawMessage `json:"template"`
+			Count    int             `json:"count"`
+		}
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil {
+			t.Errorf("decode generation input: %v", err)
+			return
+		}
+		if input.Count != author.MaxPayloadCount {
+			t.Errorf("generation count = %d, want cap %d", input.Count, author.MaxPayloadCount)
+		}
+		if string(input.Template) != `{"value":0}` {
+			t.Errorf("template = %s, want stored body template", input.Template)
+		}
+		payloads := make([]json.RawMessage, input.Count)
+		for i := range payloads {
+			payloads[i] = json.RawMessage(fmt.Sprintf(`{"value":%d}`, i+1))
+		}
+		content, err := json.Marshal(map[string]any{"payloads": payloads})
+		if err != nil {
+			t.Errorf("marshal payloads: %v", err)
+			return
+		}
+		response, err := json.Marshal(map[string]any{"message": map[string]string{"content": string(content)}})
+		if err != nil {
+			t.Errorf("marshal Ollama response: %v", err)
+			return
+		}
+		_, _ = w.Write(response)
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+		ID: "ep-body", Name: "Body endpoint", Method: "POST", URLTemplate: "https://api.example.com/body",
+		Body: &model.BodyTemplate{Raw: []byte(`{"value":0}`)},
+	}); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	mux := web.NewServer(db)
+	panelRequest := httptest.NewRequest(http.MethodGet, "/requests/ep-body", nil)
+	panelResponse := httptest.NewRecorder()
+	mux.ServeHTTP(panelResponse, panelRequest)
+	if panelResponse.Code != http.StatusOK || !strings.Contains(panelResponse.Body.String(), "Generate sample data") {
+		t.Fatalf("payload generation control not rendered for a body template: %d %s", panelResponse.Code, panelResponse.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodPost, "/requests/ep-body/payloads/generate?count=501", nil)
+	response := httptest.NewRecorder()
+
+	// Act
+	mux.ServeHTTP(response, request)
+
+	// Assert
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var got struct {
+		Payloads       []json.RawMessage `json:"payloads"`
+		RequestedCount int               `json:"requested_count"`
+		GeneratedCount int               `json:"generated_count"`
+		Capped         bool              `json:"capped"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.RequestedCount != 501 || got.GeneratedCount != author.MaxPayloadCount ||
+		len(got.Payloads) != author.MaxPayloadCount || !got.Capped {
+		t.Fatalf("response metadata = requested %d generated %d payloads %d capped %v",
+			got.RequestedCount, got.GeneratedCount, len(got.Payloads), got.Capped)
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(configs) != 0 || len(runs) != 0 {
+		t.Errorf("payload generation persisted configs/runs: %d/%d, want none", len(configs), len(runs))
+	}
+}
+
+func TestRunsPersistsAndDispatchesGeneratedPayloadPool(t *testing.T) {
+	// Arrange
+	bodies := make(chan string, 3)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Value int `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request body: %v", err)
+			return
+		}
+		bodies <- fmt.Sprint(body.Value)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	db := newTestDB(t)
+	mux := web.NewServer(db)
+	form := url.Values{
+		"request_id":      {"ep-pool"},
+		"request_name":    {"Payload pool"},
+		"method":          {http.MethodPost},
+		"url":             {target.URL},
+		"body":            {`{"value":0}`},
+		"payload_pool":    {`[{"value":1},{"value":2}]`},
+		"mode":            {"burst"},
+		"concurrency":     {"1"},
+		"total_requests":  {"3"},
+		"burst_count":     {"10"},
+		"burst_idle_ms":   {"0"},
+		"expected_status": {"200"},
+	}
+
+	// Act
+	runID := postRuns(t, mux, form)
+	pollDone(t, mux, runID)
+
+	// Assert
+	gotBodies := []string{<-bodies, <-bodies, <-bodies}
+	if strings.Join(gotBodies, ",") != "1,2,1" {
+		t.Fatalf("dispatched request body values = %v, want [1 2 1]", gotBodies)
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	if len(configs) != 1 || len(configs[0].PayloadPool) != 2 {
+		t.Fatalf("persisted configs/payload pool = %d/%d, want 1/2", len(configs), len(configs[0].PayloadPool))
+	}
+}
+
+func TestPostNLTestConfigFillsBoundedValuesWithoutSaving(t *testing.T) {
+	// Arrange
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode Ollama request: %v", err)
+			return
+		}
+		var input author.TestConfigPrompt
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil {
+			t.Errorf("decode prompt: %v", err)
+			return
+		}
+		if input.Endpoint.ID != "ep-login" || input.Endpoint.URL != "https://api.example.com/login" {
+			t.Errorf("endpoint context = %+v, want selected endpoint metadata only", input.Endpoint)
+		}
+		var content string
+		switch {
+		case strings.Contains(strings.ToLower(input.Description), "soak"):
+			content = `{"mode":"soak","concurrency":20,"duration_seconds":3600,"total_requests":null,"reasoning":"Soak mode runs for one hour at 20 concurrent workers."}`
+		case strings.Contains(strings.ToLower(input.Description), "burst"):
+			content = `{"mode":"burst","concurrency":10,"duration_seconds":null,"total_requests":1000,"reasoning":"Burst mode sends the requested 1000 total requests."}`
+		case strings.Contains(strings.ToLower(input.Description), "extreme"):
+			content = `{"mode":"load","concurrency":999999,"duration_seconds":99999999,"total_requests":null,"reasoning":"Extreme load requested."}`
+		default:
+			content = `{"mode":"load","concurrency":200,"duration_seconds":120,"total_requests":null,"reasoning":"A two-minute load run with 200 concurrent workers matches the request."}`
+		}
+		response, err := json.Marshal(map[string]any{"message": map[string]string{"content": content}})
+		if err != nil {
+			t.Errorf("marshal response: %v", err)
+			return
+		}
+		_, _ = w.Write(response)
+	}))
+	defer ollama.Close()
+	t.Setenv("PRIMUS_ANALYZER", "ollama")
+	t.Setenv("PRIMUS_LLM_URL", ollama.URL)
+	t.Setenv("PRIMUS_LLM_MODEL", "test-model")
+
+	db := newTestDB(t)
+	if err := store.SaveRequestDefinition(db, model.RequestDefinition{
+		ID: "ep-login", Name: "Login", Method: "POST", URLTemplate: "https://api.example.com/login",
+		Body: &model.BodyTemplate{Raw: []byte(`{"password":"private"}`)},
+	}); err != nil {
+		t.Fatalf("SaveRequestDefinition: %v", err)
+	}
+	mux := web.NewServer(db)
+	tests := []struct {
+		name        string
+		description string
+		want        author.TestConfigSuggestion
+	}{
+		{
+			name: "load", description: "Simulate 200 users hammering this for 2 minutes",
+			want: author.TestConfigSuggestion{Mode: "load", Concurrency: 200, DurationSeconds: 120, Reasoning: "A two-minute load run with 200 concurrent workers matches the request."},
+		},
+		{
+			name: "soak", description: "Run a one-hour soak with 20 users",
+			want: author.TestConfigSuggestion{Mode: "soak", Concurrency: 20, DurationSeconds: 3600, Reasoning: "Soak mode runs for one hour at 20 concurrent workers."},
+		},
+		{
+			name: "burst", description: "Send 1000 requests in bursts with 10 workers",
+			want: author.TestConfigSuggestion{Mode: "burst", Concurrency: 10, TotalRequests: 1000, Reasoning: "Burst mode sends the requested 1000 total requests."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			payload, err := json.Marshal(map[string]string{"request_id": "ep-login", "description": tt.description})
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/nl/testconfig", bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// Act
+			mux.ServeHTTP(response, request)
+
+			// Assert
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var got author.TestConfigSuggestion
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode suggestion: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("suggestion = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+
+	// Act
+	extremePayload, err := json.Marshal(map[string]string{"request_id": "ep-login", "description": "Use an extreme unbounded test"})
+	if err != nil {
+		t.Fatalf("marshal extreme request: %v", err)
+	}
+	extremeRequest := httptest.NewRequest(http.MethodPost, "/nl/testconfig", bytes.NewReader(extremePayload))
+	extremeRequest.Header.Set("Content-Type", "application/json")
+	extremeResponse := httptest.NewRecorder()
+	mux.ServeHTTP(extremeResponse, extremeRequest)
+
+	// Assert
+	if extremeResponse.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(extremeResponse.Body.String(), "concurrency 999999 exceeds maximum 2000") {
+		t.Fatalf("extreme response = %d %s, want explicit bounds rejection", extremeResponse.Code, extremeResponse.Body.String())
+	}
+	configs, err := store.ListTestConfigs(db)
+	if err != nil {
+		t.Fatalf("ListTestConfigs: %v", err)
+	}
+	runs, err := store.ListAllRuns(db)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(configs) != 0 || len(runs) != 0 {
+		t.Errorf("generation saved configs/runs: %d/%d, want none", len(configs), len(runs))
+	}
+}

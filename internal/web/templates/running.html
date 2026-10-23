@@ -6,4 +6,5 @@
     <button type="button" class="secondary"
       hx-post="/runs/{{.RunID}}/stop" hx-target="#results" hx-swap="innerHTML">■ Stop</button>
   </div>
+  {{template "timeseries" .}}
 </div>

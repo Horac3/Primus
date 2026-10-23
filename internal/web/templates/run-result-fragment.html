@@ -2,6 +2,7 @@
 <div class="card">
   <p style="margin-bottom:.5rem">
     <span class="{{outcomeClass .Outcome}}">{{outcomeLabel .Outcome}}</span>
+    {{if .Stopped}}&nbsp;<span class="muted">⏹ Stopped early</span>{{end}}
     &nbsp;<span class="muted">Run <a href="/runs/{{.ID}}" style="color:#3b82d4">{{.ID}}</a></span>
   </p>
   <table>
@@ -9,18 +10,34 @@
         <th>P95</th><td>{{.Summary.P95Millis}} ms</td>
         <th>P99</th><td>{{.Summary.P99Millis}} ms</td></tr>
     <tr><th>Requests</th><td>{{.Summary.TotalRequests}}</td>
-        <th>Requests/sec</th><td>{{requestsPerSec .}}</td>
+        <th>Requests/sec</th><td>{{requestsPerSec .Run}}</td>
         <th></th><td></td></tr>
     <tr><th>Errors</th><td>{{.Summary.ErrorCount}}</td>
         <th>Error rate</th><td>{{printf "%.1f%%" (mul .Summary.ErrorRate 100.0)}}</td>
         <th></th><td></td></tr>
+    {{if .Summary.TargetRate}}
+    <tr><th>Target rate</th><td>{{printf "%g" .Summary.TargetRate}}/s</td>
+        <th>Achieved rate</th><td>{{printf "%.1f" .Summary.AchievedRate}}/s</td>
+        <th>Dropped</th><td>{{.Summary.Dropped}}</td></tr>
+    {{end}}
   </table>
+  {{template "cancelled-note" .}}
   {{if .Summary.StatusCounts}}
   <table style="margin-top:.5rem">
     <thead><tr><th>Status</th><th>Count</th></tr></thead>
     <tbody>
     {{range $code,$count := .Summary.StatusCounts}}
     <tr><td>{{$code}}</td><td>{{$count}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+  {{if .Summary.ErrorDetails}}
+  <table style="margin-top:.5rem">
+    <thead><tr><th>Failure cause</th><th>Count</th></tr></thead>
+    <tbody>
+    {{range .Summary.ErrorDetails}}
+    <tr><td style="overflow-wrap:anywhere">{{redact .Cause}}</td><td>{{.Count}}</td></tr>
     {{end}}
     </tbody>
   </table>
@@ -35,5 +52,8 @@
     </tbody>
   </table>
   {{end}}
+  {{template "login-summary" .Run}}
+  {{template "timeseries" .}}
   {{template "histogram" .}}
+  {{template "insight-fragment" .InsightView}}
 </div>

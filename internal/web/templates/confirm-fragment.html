@@ -1,0 +1,4 @@
+{{- /* confirm-fragment.html — fragment: result or confirmation of a clear-history request. Target: a .slot */ -}}
+{{with .Error}}<p class="verdict-fail" role="status">{{.}}</p>{{end}}
+{{with .Message}}<p class="verdict-pass" role="status">{{.}}</p>{{end}}
+{{with .Confirm}}{{template "confirm-box" .}}{{end}}

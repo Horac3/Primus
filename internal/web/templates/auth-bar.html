@@ -4,7 +4,7 @@
   <span data-testid="auth-status">{{authSummary .Auth}}</span>
   &nbsp;
   <label style="display:inline-block">Type
-    <select name="auth_type" style="width:auto">
+    <select name="auth_type" style="width:auto" onchange="const showBasic = this.value === 'basic'; this.form.querySelectorAll('[data-basic-auth]').forEach(field => { field.hidden = !showBasic; });">
       <option value="none" {{if eq .Auth.Type "none"}}selected{{end}}>None</option>
       <option value="bearer" {{if eq .Auth.Type "bearer"}}selected{{end}}>Bearer token</option>
       <option value="api_key" {{if eq .Auth.Type "api_key"}}selected{{end}}>API key</option>
@@ -17,11 +17,27 @@
   <label style="display:inline-block">Header
     <input type="text" name="auth_header" style="width:110px" placeholder="X-API-Key" value="{{.Auth.Header}}">
   </label>
-  <label style="display:inline-block">User
+  <label data-basic-auth {{if ne .Auth.Type "basic"}}hidden{{end}} style="display:inline-block">User
     <input type="text" name="auth_username" style="width:100px" value="{{.Auth.Username}}">
   </label>
-  <label style="display:inline-block">Password
+  <label data-basic-auth {{if ne .Auth.Type "basic"}}hidden{{end}} style="display:inline-block">Password
     <input type="password" name="auth_password" style="width:110px">
   </label>
   <button type="submit" class="secondary">Save</button>
+</form>
+<form hx-post="/pools/active" hx-target="#auth-bar" hx-swap="innerHTML" style="margin-top:.4rem">
+  <strong>👥 Runs log in as:</strong>
+  {{if .ActivePool}}
+  <span data-testid="auth-mode">Credential pool: {{.ActivePool.Name}} ({{.ActivePool.Count}} accounts)</span>
+  <span class="muted">— overrides global auth; one account per worker</span>
+  {{else}}
+  <span data-testid="auth-mode">Global auth</span>
+  {{end}}
+  &nbsp;
+  <select name="pool_id" style="width:auto">
+    <option value="">Global auth</option>
+    {{range .Pools}}<option value="{{.ID}}" {{if and $.ActivePool (eq $.ActivePool.ID .ID)}}selected{{end}}>{{.Name}} ({{.Count}})</option>{{end}}
+  </select>
+  <button type="submit" class="secondary">Use</button>
+  <button type="button" class="secondary" hx-get="/pools-fragment" hx-target="#pool-panel" hx-swap="innerHTML">Manage credential pools</button>
 </form>

@@ -16,11 +16,15 @@ import (
 	"github.com/yuin/goldmark/extension"
 )
 
-//go:embed *.md
+// Only the public reference pages are embedded. Maintainer files in this
+// directory (progress.md, decisions.md, requirements.md, architecture.md)
+// must not ship in the binary: a new public page is added here and to order.
+//
+//go:embed load.md burst.md soak.md auth-probe.md global-auth.md credential-pools.md assertions.md history.md reports.md cli.md collections.md
 var files embed.FS
 
 // order is the sidebar order for the viewer index.
-var order = []string{"load", "burst", "soak", "auth-probe", "global-auth", "assertions", "cli"}
+var order = []string{"load", "burst", "soak", "auth-probe", "global-auth", "credential-pools", "assertions", "history", "reports", "cli", "collections"}
 
 // Doc is one reference page: its URL slug and display title.
 type Doc struct {

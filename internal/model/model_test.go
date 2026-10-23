@@ -255,4 +255,70 @@ func TestRun_AssertionResultsAndBucketsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRun_TimeSeriesRoundTrip(t *testing.T) {
+	// Arrange
+	orig := model.Run{
+		ID:           "run-timeseries",
+		TestConfigID: "cfg-timeseries",
+		StartedAt:    time.Now().UTC().Truncate(time.Second),
+		FinishedAt:   time.Now().UTC().Truncate(time.Second).Add(2 * time.Second),
+		Summary: model.RunSummary{ErrorDetails: []model.ErrorDetail{
+			{Cause: "connection refused", Count: 2},
+		}},
+		TimeSeries: []model.Point{
+			{ElapsedMs: 1000, AvgLatencyMs: 120.5, RPS: 8.5, ErrorRate: 0.2},
+			{ElapsedMs: 2000, AvgLatencyMs: 150.0, RPS: 10.0, ErrorRate: 0.1},
+		},
+	}
+
+	// Act
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got model.Run
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Assert
+	if len(got.TimeSeries) != 2 {
+		t.Fatalf("TimeSeries len = %d, want 2", len(got.TimeSeries))
+	}
+	if got.TimeSeries[1].ElapsedMs <= got.TimeSeries[0].ElapsedMs {
+		t.Fatalf("TimeSeries elapsed times should be monotonic; got %+v", got.TimeSeries)
+	}
+	if got.TimeSeries[0].AvgLatencyMs != 120.5 {
+		t.Fatalf("AvgLatencyMs[0] = %v, want 120.5", got.TimeSeries[0].AvgLatencyMs)
+	}
+	if len(got.Summary.ErrorDetails) != 1 || got.Summary.ErrorDetails[0] != (model.ErrorDetail{Cause: "connection refused", Count: 2}) {
+		t.Fatalf("ErrorDetails = %+v, want persisted transport failure detail", got.Summary.ErrorDetails)
+	}
+}
+
 func strPtr(s string) *string { return &s }
+
+func TestRateFields_JSONRoundTrip(t *testing.T) {
+	cfg := model.TestConfig{Mode: model.ModeRate, Concurrency: 20, Duration: 15 * time.Second, TargetRate: 500}
+	run := model.Run{Outcome: model.OutcomeFailRateNotSustained, Summary: model.RunSummary{Dropped: 7, TargetRate: 500, AchievedRate: 493.5}}
+
+	var gotCfg model.TestConfig
+	var gotRun model.Run
+	for _, rt := range []struct{ in, out any }{{cfg, &gotCfg}, {run, &gotRun}} {
+		b, err := json.Marshal(rt.in)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if err := json.Unmarshal(b, rt.out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+	}
+
+	if gotCfg.Mode != model.ModeRate || gotCfg.TargetRate != 500 {
+		t.Errorf("config = %+v, want mode rate and target_rate 500", gotCfg)
+	}
+	s := gotRun.Summary
+	if gotRun.Outcome != model.OutcomeFailRateNotSustained || s.Dropped != 7 || s.TargetRate != 500 || s.AchievedRate != 493.5 {
+		t.Errorf("run = %+v, want the rate fields back", gotRun)
+	}
+}

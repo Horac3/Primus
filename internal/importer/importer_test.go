@@ -253,3 +253,36 @@ func TestImportFromBytes_EmptyPaths_ReturnsEmptySlice(t *testing.T) {
 		t.Errorf("len(defs) = %d, want 0", len(defs))
 	}
 }
+
+// ---- Spec title (FR-COLL-08) -----------------------------------------------
+
+func TestParseSpec_ReturnsTitleAndDefinitions(t *testing.T) {
+	spec, err := importer.ParseSpec(readFixture(t, "get_path_param.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Title == "" || len(spec.Defs) != 1 {
+		t.Fatalf("title %q, %d defs", spec.Title, len(spec.Defs))
+	}
+}
+
+func TestParseSpec_BlankTitleFallsBack(t *testing.T) {
+	data := []byte(`{"openapi":"3.0.0","info":{"title":"  ","version":"1"},"paths":{}}`)
+	spec, err := importer.ParseSpec(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Title != importer.DefaultTitle {
+		t.Fatalf("title %q, want %q", spec.Title, importer.DefaultTitle)
+	}
+}
+
+func TestFetchSpec_ReturnsTitle(t *testing.T) {
+	data := readFixture(t, "get_path_param.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(data) }))
+	defer srv.Close()
+	spec, err := importer.FetchSpec(context.Background(), srv.URL)
+	if err != nil || spec.Title == "" {
+		t.Fatalf("spec %+v, err %v", spec, err)
+	}
+}

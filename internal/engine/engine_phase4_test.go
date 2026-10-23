@@ -109,7 +109,7 @@ func TestRunOutcome_AssertionsMet_IsPass(t *testing.T) {
 func TestRunOutcome_AssertionsFailed_IsFail(t *testing.T) {
 	// Arrange
 	assertions := model.Assertions{MaxErrorRate: 0.05}
-	summary := model.RunSummary{ErrorCount: 5, ErrorRate: 0.5}
+	summary := model.RunSummary{StatusCounts: map[int]int{200: 5}, ErrorCount: 5, ErrorRate: 0.5}
 
 	// Act
 	outcome := engine.DetermineOutcome(assertions, summary)
@@ -149,8 +149,9 @@ func TestProbe_SuccessfulTarget(t *testing.T) {
 	if !result.OK {
 		t.Error("OK = false, want true")
 	}
-	if result.LatencyMs <= 0 {
-		t.Errorf("LatencyMs = %d, want > 0", result.LatencyMs)
+	// LatencyMs is whole milliseconds, so a localhost probe can legitimately report 0.
+	if result.LatencyMs < 0 {
+		t.Errorf("LatencyMs = %d, want >= 0", result.LatencyMs)
 	}
 }
 

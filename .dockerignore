@@ -8,6 +8,9 @@ bob_sessions/
 # Agent instructions (not needed in build context)
 agent_instructions/
 
+# Developer tooling (never part of the image)
+tools/
+
 # Local build output
 bin/
 tmp/

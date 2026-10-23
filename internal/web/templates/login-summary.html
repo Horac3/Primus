@@ -1,0 +1,24 @@
+{{define "login-summary"}}
+{{with .Login}}
+<div data-testid="login-summary" style="margin-top:.5rem">
+  <h2>Logins <span class="muted" style="text-transform:none">· pool {{.PoolName}}</span></h2>
+  <table>
+    <tr><th>Attempted</th><td>{{.Attempted}}</td>
+        <th>Succeeded</th><td>{{.Succeeded}} / {{.Attempted}} succeeded</td>
+        <th>Failed</th><td>{{.Failed}}{{with .Cancelled}} <span class="muted">· {{.}} interrupted by stop</span>{{end}}</td></tr>
+    <tr><th>Login p50</th><td>{{.P50Millis}} ms</td>
+        <th>Login p95</th><td>{{.P95Millis}} ms</td>
+        <th>Re-logins on 401</th><td>{{.ReloginsSucceeded}} / {{.Relogins}}</td></tr>
+  </table>
+  {{if .FailureReasons}}
+  <table style="margin-top:.5rem">
+    <thead><tr><th>Login failure reason</th><th>Count</th></tr></thead>
+    <tbody>
+    {{range .FailureReasons}}<tr><td style="overflow-wrap:anywhere">{{redact .Cause}}</td><td>{{.Count}}</td></tr>{{end}}
+    </tbody>
+  </table>
+  {{end}}
+  <p class="muted">Login time is measured here only; it is not part of the request latency above.</p>
+</div>
+{{end}}
+{{end}}

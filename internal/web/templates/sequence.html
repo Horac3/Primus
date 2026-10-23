@@ -1,0 +1,20 @@
+{{- /* sequence.html — fragment: progress of a run-all sequence. Polls every second until it finishes. */ -}}
+<div id="sequence-{{.ID}}" class="card" data-testid="sequence" data-sequence-id="{{.ID}}" data-finished="{{.Finished}}"
+  {{if not .Finished}}hx-get="/sequences/{{.ID}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap">
+    <strong>Run all — {{.CollectionName}}</strong>
+    {{if .Finished}}
+    <button type="button" class="secondary" hx-get="/collections/{{.CollectionID}}" hx-target="#main-panel" hx-swap="innerHTML">Back to the table</button>
+    {{else}}
+    <button type="button" class="secondary" hx-post="/sequences/{{.ID}}/stop" hx-target="#sequence-{{.ID}}" hx-swap="outerHTML">■ Stop all</button>
+    {{end}}
+  </div>
+  <ol>
+  {{range .Items}}
+    <li data-endpoint="{{.EndpointID}}" data-status="{{.Status}}">
+      {{.Name}} — {{.Status}}{{if .Reason}} ({{.Reason}}){{end}}
+      {{if .RunID}} · <a href="/runs/{{.RunID}}">report</a>{{end}}
+    </li>
+  {{end}}
+  </ol>
+</div>

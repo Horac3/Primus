@@ -1,0 +1,32 @@
+{{- /* collection-page.html — fragment: one collection's endpoints and their latest runs. Target: #main-panel */ -}}
+<div class="card" data-testid="collection-page">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap">
+    <strong>{{.Collection.Name}}</strong>
+    {{if .Collection.BaseURL}}<span class="muted">{{.Collection.BaseURL}}</span>{{end}}
+  </div>
+  {{if .Rows}}
+  <div style="margin:.5rem 0">
+    <button type="button" hx-post="/collections/{{.Collection.ID}}/run-all" hx-target="#sequence-area" hx-swap="innerHTML">▶ Run all</button>
+    <span class="muted">Runs each endpoint with its newest saved test config, one after another.</span>
+  </div>
+  <div id="sequence-area"></div>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Last verdict</th><th>p95</th><th>Error %</th><th>Last run (UTC)</th><th>Report</th></tr></thead>
+    <tbody>
+    {{range .Rows}}
+      <tr>
+        <td><a href="#" hx-get="/requests/{{.Endpoint.ID}}" hx-target="#main-panel" hx-swap="innerHTML"><span class="method">{{.Endpoint.Method}}</span> {{.Endpoint.Name}}</a>
+          <a href="#" class="muted" hx-get="/requests/{{.Endpoint.ID}}/report" hx-target="#main-panel" hx-swap="innerHTML">endpoint report</a></td>
+        <td>{{.Verdict}}</td>
+        <td>{{.P95}}</td>
+        <td>{{.ErrPct}}</td>
+        <td>{{.LastRun}}</td>
+        {{if .RunID}}<td><a href="/runs/{{.RunID}}">report</a></td>{{else}}<td>-</td>{{end}}
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">no endpoints yet</p>
+  {{end}}
+</div>

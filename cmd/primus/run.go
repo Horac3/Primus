@@ -45,6 +45,12 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		fmt.Fprintf(os.Stderr, "primus run: request %q not found in DB: %v\n", cfg.RequestID, err)
 		return 2
 	}
+	// {{base_url}} resolves from the endpoint's collection, as in the web handler.
+	reqDef, err = store.ResolveURL(db, reqDef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "primus run: request %q: %v\n", cfg.RequestID, err)
+		return 2
+	}
 
 	// Global auth, applied to every dispatched request.
 	auth, err := store.GetGlobalAuth(db)
@@ -53,9 +59,29 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		return 2
 	}
 
+	// A credential pool, when the config names one, overrides global auth.
+	var pool *model.CredentialPool
+	if cfg.CredentialPoolID != "" && cfg.AuthSource.UsesPool() {
+		p, err := store.GetCredentialPoolWithSecrets(db, cfg.CredentialPoolID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "primus run: credential pool %q not found in DB\n", cfg.CredentialPoolID)
+			return 2
+		}
+		pool = &p
+	}
+	// auth_source picks global auth, the pool, or no auth at all.
+	auth, pool, err = engine.ResolveAuth(cfg, auth, pool)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "primus run: %v\n", err)
+		return 2
+	}
+	if pool == nil {
+		cfg.CredentialPoolID = "" // the saved run names only a pool it used
+	}
+
 	// Execute the run using the same engine as the web handler.
-	// CLI stays synchronous: it calls engine.Run directly and waits.
-	run, err := engine.Run(ctx, reqDef, cfg, auth)
+	// CLI stays synchronous: it calls the engine directly and waits.
+	run, err := engine.RunWithPool(ctx, reqDef, cfg, auth, pool, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "primus run: engine error: %v\n", err)
 		return 2
@@ -75,6 +101,9 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		FinishedAt   string           `json:"finished_at"`
 		Summary      model.RunSummary `json:"summary"`
 		Passed       bool             `json:"passed"`
+		Outcome      model.RunOutcome `json:"outcome"`
+		// Login carries counts, latencies and failure classes only.
+		Login *model.LoginSummary `json:"login,omitempty"`
 	}{
 		ID:           run.ID,
 		TestConfigID: run.TestConfigID,
@@ -82,6 +111,8 @@ func runCmd(ctx context.Context, args []string, stdout io.Writer, db *sql.DB) in
 		FinishedAt:   run.FinishedAt.Format("2006-01-02T15:04:05Z"),
 		Summary:      run.Summary,
 		Passed:       run.Passed,
+		Outcome:      run.Outcome,
+		Login:        run.Login,
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")

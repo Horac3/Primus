@@ -12,7 +12,7 @@ Test modes, one line each:
 - **load** — steady traffic: N workers firing requests for a fixed count or a fixed duration.
 - **burst** — pulsed traffic: requests released in bursts with idle gaps, for recovery testing.
 - **soak** — duration-only steady traffic, for catching slow degradation over minutes.
-- **auth-probe** — repeated credentialed requests, for rate-limit/lockout behavior (basic support today, see roadmap below).
+- **auth-probe** — repeated credentialed requests, for rate-limit/lockout behavior (attempt count, max attempts/sec and the identity to send as).
 
 ## Quickstart
 
@@ -31,6 +31,19 @@ go run ./cmd/primus            # serve the UI on :8080, DB in ./primus.db
 go run ./cmd/primus run <config.json>   # headless CI run, exits 0/1/2
 ```
 
+## Data and backups
+
+- SQLite runs in WAL mode, so Primus keeps `primus.db-wal` and `primus.db-shm`
+  beside `primus.db`. Recent writes can live in the `-wal` file until SQLite
+  folds them back in.
+- To back up, stop Primus, then copy the whole `/data` directory (or the
+  directory holding `primus.db` without Docker). A copy taken while Primus runs
+  can catch the database and its `-wal` file at different moments, and copying
+  `primus.db` alone can miss recent writes.
+- WAL needs shared memory on a local filesystem. Bind-mounting `/data` from a
+  network share, or from a Windows or macOS host folder, can break it. Use the
+  named volume that compose creates.
+
 ## Docs
 
 - [`docs/`](docs/) — one reference file per test mode, plus global auth,
@@ -41,8 +54,6 @@ go run ./cmd/primus run <config.json>   # headless CI run, exits 0/1/2
 
 ## What's next (roadmap, not bugs)
 
-- **Auth-probe UI wiring**: the mode exists and runs, but dedicated
-  attempt-count/rate/credential fields are not in the UI yet.
 - **True multi-hour soak**: soak is demo-scale today (seconds-to-minutes)
   with no trend graphing across runs.
 

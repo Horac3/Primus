@@ -5,8 +5,23 @@
   {{else}}<span class="method">{{.Def.Method}}</span> {{.Def.URLTemplate}}{{end}}
 </p>
 
+{{if .AuthoringEnabled}}
+<section class="card">
+  <h2 style="margin-top:0">Describe a request</h2>
+  <label>
+    <span>What should this endpoint do?</span>
+    <textarea id="nl-request-description" rows="2" placeholder="Test the login endpoint with a wrong password"></textarea>
+  </label>
+  <button type="button" class="secondary" style="margin-top:.5rem" onclick="generateRequestDefinition()">Generate from description</button>
+  <p id="nl-request-status" class="muted" role="status" style="margin-top:.35rem"></p>
+  <p id="nl-request-confidence" class="muted" style="margin-top:.25rem"></p>
+</section>
+{{end}}
+
 <form id="panel-form" hx-post="/runs" hx-target="#results" hx-swap="innerHTML" hx-indicator="#run-spinner">
-  {{if not .IsNew}}<input type="hidden" name="request_id" value="{{.Def.ID}}">{{end}}
+  <input type="hidden" name="request_id" value="{{.Def.ID}}">
+  <input type="hidden" name="request_name" value="{{.Def.Name}}">
+  <input type="hidden" name="payload_pool" id="payload-pool" value="[]">
   <h2>Request</h2>
   <div class="row" style="margin-bottom:.5rem">
     <label style="flex:0 0 100px">
@@ -21,13 +36,42 @@
     </label>
     <label style="flex:1 1 auto">
       <span>URL</span>
-      <input type="url" name="url" value="{{.Def.URLTemplate}}" placeholder="https://api.example.com/endpoint" required>
+      <input type="text" name="url" value="{{.Def.URLTemplate}}" placeholder="https://api.example.com/endpoint or {{"{{base_url}}"}}/endpoint" required>
     </label>
   </div>
+  <label style="margin-bottom:.5rem">
+    <span>Collection</span>
+    <select name="collection_id">
+      {{if .DefaultOption}}<option value="" selected>My endpoints</option>{{end}}
+      {{range .Collections}}<option value="{{.ID}}" {{if eq .ID $.Def.CollectionID}}selected{{end}}>{{.Name}}</option>{{end}}
+    </select>
+  </label>
+
+  <label style="margin-bottom:.5rem">
+    <span>Notes</span>
+    <textarea name="notes" rows="2" placeholder="What this endpoint is for, or what to watch for">{{.Def.Notes}}</textarea>
+  </label>
 
   <details>
     <summary>JSON body (optional)</summary>
     <textarea name="body" rows="5" placeholder='{"key":"value"}'>{{.BodyStr}}</textarea>
+  </details>
+  {{if and .AuthoringEnabled .HasBody}}
+  <section class="card">
+    <h2 style="margin-top:0">Generate sample data</h2>
+    <div class="row" style="align-items:flex-end">
+      <label style="flex:0 0 140px">
+        <span>Payload variants (max 500)</span>
+        <input id="payload-count" type="number" value="20" min="1" max="500">
+      </label>
+      <button type="button" class="secondary" data-request-id="{{.Def.ID}}" onclick="generatePayloads(this.dataset.requestId)">Generate sample data</button>
+    </div>
+    <p id="payload-status" class="muted" role="status" style="margin-top:.35rem"></p>
+  </section>
+  {{end}}
+  <details>
+    <summary>Request headers (JSON)</summary>
+    <textarea name="headers_json" rows="3" placeholder='{"Content-Type":"application/json"}'>{{.HeadersJSON}}</textarea>
   </details>
 
   <details open>
@@ -53,6 +97,19 @@
     <span id="probe-spinner" class="htmx-indicator muted">testing…</span>
   </div>
 
+  {{if and .AuthoringEnabled (not .IsNew)}}
+  <section class="card">
+    <h2 style="margin-top:0">Describe a test</h2>
+    <label>
+      <span>What load should this endpoint receive?</span>
+      <textarea id="nl-testconfig-description" rows="2" placeholder="Simulate 200 users hammering this for 2 minutes"></textarea>
+    </label>
+    <button type="button" class="secondary" style="margin-top:.5rem" data-request-id="{{.Def.ID}}" onclick="generateTestConfig(this.dataset.requestId)">Generate test config</button>
+    <p id="nl-testconfig-status" class="muted" role="status" style="margin-top:.35rem"></p>
+    <p id="nl-testconfig-reasoning" class="muted" style="margin-top:.25rem"></p>
+  </section>
+  {{end}}
+
   <h2>Test</h2>
   <div class="row">
     <label>
@@ -62,11 +119,12 @@
         <option value="burst">Burst (pulsed)</option>
         <option value="auth_probe">Auth probe</option>
         <option value="soak">Soak (timed)</option>
+        <option value="rate">Fixed rate (req/s)</option>
       </select>
     </label>
     <label>
       <span>Concurrency</span>
-      <input type="number" name="concurrency" value="5" min="1" max="500">
+      <input type="number" name="concurrency" value="5" min="1">
     </label>
   </div>
 
@@ -82,17 +140,48 @@
   <div id="fields-count" style="margin-top:.5rem;display:none">
     <div class="row">
       <label>
-        <span>Total requests</span>
+        <span id="count-label">Total requests</span>
         <input type="number" name="total_requests" value="50" min="1" disabled>
       </label>
     </div>
-    <details style="margin-top:.5rem">
+    <details id="fields-burst" style="margin-top:.5rem">
       <summary>Burst settings</summary>
       <div class="row" style="margin-top:.5rem">
         <label><span>Requests per burst</span><input type="number" name="burst_count" value="10" min="1" disabled></label>
         <label><span>Idle between bursts (ms)</span><input type="number" name="burst_idle_ms" value="500" min="0" disabled></label>
       </div>
     </details>
+  </div>
+
+  <div id="fields-rate" style="margin-top:.5rem;display:none">
+    <div class="row">
+      <label>
+        <span>Target requests per second</span>
+        <input type="number" name="target_rate" value="50" min="0.01" step="any" disabled>
+      </label>
+    </div>
+    <p class="muted" style="margin-top:.35rem">Requests go out on this schedule whether or not earlier ones have
+      answered. Concurrency becomes the most requests in flight; a request due while all are busy is dropped.</p>
+  </div>
+
+  <div id="fields-probe" style="margin-top:.5rem;display:none">
+    <div class="row">
+      <label>
+        <span>Max attempts per second (empty = no cap)</span>
+        <input type="number" name="max_rate" min="0" step="any" placeholder="no cap" disabled>
+      </label>
+      <label>
+        <span>Send as</span>
+        <select name="auth_source" disabled>
+          <option value="">Active pool, else global auth</option>
+          <option value="global">Global auth only</option>
+          <option value="pool">Active credential pool</option>
+          <option value="none">No auth</option>
+        </select>
+      </label>
+    </div>
+    <p class="muted" style="margin-top:.35rem">A ceiling, not a target: attempts also wait for a free worker,
+      so the rate reached is at most concurrency ÷ latency.</p>
   </div>
 
   <details style="margin-top:.5rem">
@@ -110,4 +199,12 @@
   </div>
 </form>
 
+{{if not .IsNew}}
+<form hx-post="/history/clear" hx-target="next .slot" hx-swap="innerHTML" style="margin-top:1rem">
+  <input type="hidden" name="scope" value="endpoint">
+  <input type="hidden" name="id" value="{{.Def.ID}}">
+  <button type="submit" class="secondary">Clear history for this endpoint</button>
+</form>
+<div class="slot"></div>
+{{end}}
 <div id="results" style="margin-top:1.25rem"></div>
