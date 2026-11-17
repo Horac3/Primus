@@ -44,6 +44,18 @@ go run ./cmd/primus run <config.json>   # headless CI run, exits 0/1/2
   network share, or from a Windows or macOS host folder, can break it. Use the
   named volume that compose creates.
 
+## Claude skills
+
+[`plugins/primus-testing`](plugins/primus-testing/) is a Claude Code plugin with skills that plan, run
+and report Primus tests on a remote server (smoke, load, stress, spike/burst, soak, auth, regression):
+
+```text
+/plugin install primus-testing --marketplace Horac3/primus
+```
+
+Headless setup for servers and CI: `primus import`, `primus list` and `primus run --collection`
+([CLI](docs/cli.md)), plus [protected hosts](docs/safety.md) to keep heavy runs off production.
+
 ## Docs
 
 - [`docs/`](docs/) — one reference file per test mode, plus global auth,

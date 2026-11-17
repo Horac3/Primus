@@ -43,6 +43,7 @@ collection and are not touched.
 | `mode` | `"load"` | — | Selects this mode. |
 | `concurrency` | int ≥ 1 | UI default 5 | Parallel workers. |
 | `assertions` | object | `{}` (none) | See [assertions](assertions.md). |
+| `allow_protected_host` | string | — | Lets a heavy run reach this exact host although it is in `PRIMUS_PROTECTED_HOSTS`. Works in every mode. See [protected hosts](safety.md). |
 
 ## Example
 

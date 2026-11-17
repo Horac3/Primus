@@ -262,3 +262,19 @@ Context: C5 (FR-INS-01..03) wanted every insight to read the same whichever anal
 Decision: `insight.Sections` (numbers, causes, next steps, optional comparison, fallback marker) is stored as JSON in `insights.sections` beside the plain `text`. The rules analyzer fills it from the summary and findings. Ollama keeps its existing reply (`headline`, `explanation`, `next_steps`) and those map to numbers, causes and steps, so the wire contract and the grounding check are unchanged. The comparison comes from `Summary.Previous` (aggregates of the endpoint's newest earlier run that completed requests, any config) and is computed by `comparisonLines` for both analyzers, so it is grounded by construction. `Previous` is also in the model input, so the model may cite those numbers. A failed or ungrounded Ollama answer falls back to rules and sets `Sections.FallbackFrom`. Rows with empty `sections` render their `text` as before.
 Known looseness: the grounding check asks only whether a number appears anywhere in the input, so with `Previous` in the input a model can quote the earlier p95 as the current one and still pass (it could already mix the current run's own numbers). Accepted.
 Revisit if: models should write the comparison prose, the comparison needs more than one earlier run, or grounding must tie each number to its metric.
+
+## D-021: Protected hosts are an operator deny-list; light runs pass, heavy runs need a host-exact override
+Context: Primus now runs headless on remote servers driven by scripts and Claude skills, where a config written for
+staging can be pointed at production by changing one base URL. Nothing stopped a soak or auth-probe from hitting
+production.
+Decision: the operator lists protected hosts in `PRIMUS_PROTECTED_HOSTS` on the machine that runs Primus. A run against
+one starts only if it is "light" (count-based load within 2 workers / 50 requests by default, enough for a smoke check)
+or its config sets `allow_protected_host` to the exact hostname. The check is `engine.TargetPolicy.Check`, called in
+`startConfiguredRun` (web form and Run all) and `executeRun` (CLI), so there is one rule for every start path.
+Rejected: classifying unknown hosts as production by default (fail closed) — it would refuse the built-in
+JSONPlaceholder collection and every existing user's runs on upgrade; a per-collection "production" flag — the
+operator's server environment, not a user-editable row, is the right owner of "this host must not be loaded"; wildcard
+overrides — an override must not travel to another host.
+Consequences: off by default, so behaviour is unchanged until the variable is set. The web UI's load mode is
+duration-based, so UI runs against a protected host always need the override field.
+Revisit if: users want per-collection environments (dev/staging/prod) or the light limits need to vary by mode.
