@@ -199,26 +199,12 @@ func importHandler(db *sql.DB, tmpl *template.Template, authoringEnabled bool, g
 		// ID so importing the same spec again never overwrites the first copy. The lock keeps a delete
 		// of the collection from landing between its creation and the inserts.
 		guard.mu.Lock()
-		col, err := store.CreateCollectionUnique(db, spec.Title, "")
+		_, defs, err := store.ImportDefinitions(db, spec.Title, "", spec.Defs)
+		guard.mu.Unlock()
 		if err != nil {
-			guard.mu.Unlock()
-			http.Error(w, "create collection: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "import failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defs := spec.Defs
-		for i := range defs {
-			defs[i].ID = col.ID + "-" + defs[i].ID
-			defs[i].CollectionID = col.ID
-			if err := store.SaveRequestDefinition(db, defs[i]); err != nil {
-				if _, derr := store.DeleteCollection(db, col.ID); derr != nil {
-					log.Printf("web: import cleanup of collection %s: %v", col.ID, derr)
-				}
-				guard.mu.Unlock()
-				http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		guard.mu.Unlock()
 
 		data, err := loadSidebarData(db)
 		if err != nil {

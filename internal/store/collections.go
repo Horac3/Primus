@@ -493,3 +493,48 @@ func Tombstoned(db *sql.DB, seedID string) (bool, error) {
 	}
 	return n > 0, nil
 }
+
+// ImportDefinitions creates a collection (a taken name gets a numeric suffix) and saves defs into it.
+// Endpoint IDs are prefixed with the collection ID so importing the same spec twice never overwrites
+// the first copy. If a save fails, the new collection is deleted again. Callers that race deletes
+// (the web handler) hold their scope guard around the call.
+func ImportDefinitions(db *sql.DB, name, baseURL string, defs []model.RequestDefinition) (model.Collection, []model.RequestDefinition, error) {
+	col, err := CreateCollectionUnique(db, name, baseURL)
+	if err != nil {
+		return model.Collection{}, nil, fmt.Errorf("create collection: %w", err)
+	}
+	saved := make([]model.RequestDefinition, len(defs))
+	for i, d := range defs {
+		d.ID = col.ID + "-" + d.ID
+		d.CollectionID = col.ID
+		if err := SaveRequestDefinition(db, d); err != nil {
+			if _, derr := DeleteCollection(db, col.ID); derr != nil {
+				return model.Collection{}, nil, fmt.Errorf("save %q: %w (cleanup of collection %s also failed: %v)", d.ID, err, col.ID, derr)
+			}
+			return model.Collection{}, nil, fmt.Errorf("save %q: %w", d.ID, err)
+		}
+		saved[i] = d
+	}
+	return col, saved, nil
+}
+
+// FindCollection returns the collection whose ID equals ref, else the one whose name equals ref
+// ignoring case. The error wraps ErrNoSuchCollection when neither matches.
+func FindCollection(db *sql.DB, ref string) (model.Collection, error) {
+	ref = strings.TrimSpace(ref)
+	all, err := ListCollections(db)
+	if err != nil {
+		return model.Collection{}, err
+	}
+	for _, c := range all {
+		if c.ID == ref {
+			return c, nil
+		}
+	}
+	for _, c := range all {
+		if strings.EqualFold(c.Name, ref) {
+			return c, nil
+		}
+	}
+	return model.Collection{}, fmt.Errorf("collection %q: %w", ref, ErrNoSuchCollection)
+}

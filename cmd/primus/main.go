@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/Horac3/Primus/internal/seed"
 	"github.com/Horac3/Primus/internal/store"
@@ -17,24 +19,13 @@ import (
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	if len(os.Args) > 1 && os.Args[1] == "run" {
-		// "primus run <config.json> [--db <path>]"
-		fs := flag.NewFlagSet("run", flag.ExitOnError)
-		dbPath := fs.String("db", "primus.db", "SQLite database file path")
-		fs.Parse(os.Args[2:]) //nolint:errcheck // ExitOnError handles errors
-
-		db, err := store.OpenDB(*dbPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "primus run: open db: %v\n", err)
-			os.Exit(2)
-		}
-		defer db.Close()
-		if err := store.Migrate(db); err != nil {
-			fmt.Fprintf(os.Stderr, "primus run: migrate: %v\n", err)
-			os.Exit(2)
-		}
-
-		os.Exit(runCmd(context.Background(), fs.Args(), os.Stdout, db))
+	// Headless subcommands: "primus run", "primus import", "primus list". Ctrl-C or SIGTERM stops a
+	// run the way the Stop button does, so the partial run is still saved and reported.
+	if len(os.Args) > 1 && isSubcommand(os.Args[1]) {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		code := subcommand(ctx, os.Args[1], os.Args[2:], os.Stdout)
+		stop()
+		os.Exit(code)
 	}
 
 	// Default: start the web server.
