@@ -1,0 +1,17 @@
+{
+  "name": "primus",
+  "owner": { "name": "Horac3" },
+  "metadata": {
+    "description": "Claude Code plugins for Primus, the self-hosted API testing tool."
+  },
+  "plugins": [
+    {
+      "name": "primus-testing",
+      "source": "./plugins/primus-testing",
+      "description": "Skills that plan, run and report API tests with Primus on a remote server: smoke, load, stress, spike/burst, soak, auth and regression.",
+      "version": "0.1.0",
+      "category": "testing",
+      "keywords": ["api-testing", "load-testing", "performance", "primus"]
+    }
+  ]
+}
