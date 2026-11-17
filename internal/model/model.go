@@ -173,6 +173,9 @@ type TestConfig struct {
 	// schedule, whether or not earlier responses have returned. In rate mode
 	// Concurrency is the maximum number of requests in flight.
 	TargetRate float64 `json:"target_rate,omitempty"`
+	// AllowProtectedHost lets a heavy run reach a host listed in PRIMUS_PROTECTED_HOSTS. It must
+	// equal the target's hostname exactly, so a config written for one host cannot reach another (D-021).
+	AllowProtectedHost string `json:"allow_protected_host,omitempty"`
 }
 
 // AuthSource says which identity a run sends.
