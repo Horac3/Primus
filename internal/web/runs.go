@@ -28,7 +28,7 @@ type runningData struct {
 	TimeSeries []model.Point
 }
 
-func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *scopeGuard) http.HandlerFunc {
+func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *scopeGuard, policy engine.TargetPolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		def, err := requestDefFromForm(r)
 		if err != nil {
@@ -87,7 +87,7 @@ func postRunHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *s
 			http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		started, err := startConfiguredRun(r.Context(), db, reg, def, resolved, cfg, true)
+		started, err := startConfiguredRun(r.Context(), db, reg, policy, def, resolved, cfg, true)
 		if err != nil {
 			writeStartError(w, err)
 			return
@@ -129,7 +129,7 @@ type startedRun struct {
 // saves cfg, and registers the run. def is the stored definition (the {{base_url}} template) and
 // resolved the copy the run sends. The caller holds guard.mu until this returns, so a delete of the
 // scope cannot slip in before the run is registered. Failures are *startError.
-func startConfiguredRun(parent context.Context, db *sql.DB, reg *Registry, def, resolved model.RequestDefinition,
+func startConfiguredRun(parent context.Context, db *sql.DB, reg *Registry, policy engine.TargetPolicy, def, resolved model.RequestDefinition,
 	cfg model.TestConfig, saveConfig bool) (startedRun, error) {
 	bad := func(format string, a ...any) error {
 		return &startError{Status: http.StatusBadRequest, Msg: fmt.Sprintf(format, a...)}
@@ -147,6 +147,10 @@ func startConfiguredRun(parent context.Context, db *sql.DB, reg *Registry, def, 
 	}
 	if err := engine.ValidateTestConfig(cfg); err != nil {
 		return startedRun{}, bad("invalid config: %v", err)
+	}
+	// Heavy runs never reach a protected host without an explicit, host-specific override (D-021).
+	if err := policy.Check(cfg, resolved.URLTemplate); err != nil {
+		return startedRun{}, bad("refused: %v", err)
 	}
 	// An active credential pool overrides global auth for the run,
 	// unless auth_source says not to use one.
@@ -365,6 +369,7 @@ func parseTestConfig(r *http.Request, requestID string) (model.TestConfig, error
 		}
 		cfg.TargetRate = rate
 	}
+	cfg.AllowProtectedHost = strings.TrimSpace(r.FormValue("allow_protected_host"))
 	cfg.AuthSource = model.AuthSource(r.FormValue("auth_source"))
 	if !cfg.AuthSource.Valid() {
 		return cfg, fmt.Errorf("unknown auth_source %q", cfg.AuthSource)

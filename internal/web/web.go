@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Horac3/Primus/internal/author"
+	"github.com/Horac3/Primus/internal/engine"
 	"github.com/Horac3/Primus/internal/insight"
 	"github.com/Horac3/Primus/internal/model"
 	"github.com/Horac3/Primus/internal/store"
@@ -54,6 +55,17 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 		bounds = author.DefaultBounds()
 	}
 	generator := configuredAuthorGenerator(bounds)
+	policy, err := engine.LoadTargetPolicy(os.Getenv)
+	if err != nil {
+		// Keep the protected host list; only the light-run limits fall back to their defaults.
+		log.Printf("web: load protected host policy: %v; using default light-run limits", err)
+		policy, _ = engine.LoadTargetPolicy(func(k string) string {
+			if k == "PRIMUS_PROTECTED_HOSTS" {
+				return os.Getenv(k)
+			}
+			return ""
+		})
+	}
 	if _, err := store.FailPendingInsights(db, "insight generation interrupted by server restart"); err != nil {
 		log.Printf("web: recover pending insights: %v", err)
 	}
@@ -92,14 +104,14 @@ func newServerWithTemplates(db *sql.DB, tmpl *template.Template) *http.ServeMux 
 	guard := &scopeGuard{}
 	mux.HandleFunc("POST /import", importHandler(db, tmpl, generator != nil, guard))
 	mux.HandleFunc("POST /probe", probeHandler(db, tmpl))
-	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg, guard))
+	mux.HandleFunc("POST /runs", postRunHandler(db, tmpl, reg, guard, policy))
 	mux.HandleFunc("GET /collections", collectionsPanelHandler(db, tmpl))
 	mux.HandleFunc("POST /collections", createCollectionHandler(db, tmpl))
 	mux.HandleFunc("POST /collections/restore", restoreExamplesHandler(db, tmpl))
 	mux.HandleFunc("POST /collections/{id}", updateCollectionHandler(db, tmpl))
 	mux.HandleFunc("GET /collections/{id}", collectionPageHandler(db, tmpl))
 	seqs := newSequenceStore()
-	mux.HandleFunc("POST /collections/{id}/run-all", runAllHandler(db, tmpl, reg, guard, seqs))
+	mux.HandleFunc("POST /collections/{id}/run-all", runAllHandler(db, tmpl, reg, guard, seqs, policy))
 	mux.HandleFunc("GET /sequences/{id}", sequenceHandler(tmpl, seqs))
 	mux.HandleFunc("POST /sequences/{id}/stop", sequenceStopHandler(tmpl, seqs))
 	mux.HandleFunc("POST /collections/{id}/expanded", setExpandedHandler(db))

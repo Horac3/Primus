@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Horac3/Primus/internal/engine"
 	"github.com/Horac3/Primus/internal/store"
 )
 
@@ -91,7 +92,7 @@ func (s *sequence) finish() {
 
 // run executes the items in order. Each iteration takes guard.mu while it re-reads the endpoint and
 // registers the run, like postRunHandler, so a delete of the collection cannot land in between.
-func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *scopeGuard) {
+func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *scopeGuard, policy engine.TargetPolicy) {
 	defer s.finish()
 	defer s.cancel() // releases the context when the sequence ends without Stop
 	items := s.view().Items
@@ -100,7 +101,7 @@ func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *sc
 			s.stopRemaining(i)
 			return
 		}
-		started, reason := s.start(ctx, db, reg, guard, item.EndpointID)
+		started, reason := s.start(ctx, db, reg, guard, policy, item.EndpointID)
 		if reason == reasonStopped {
 			s.stopRemaining(i)
 			return
@@ -128,7 +129,7 @@ func (s *sequence) run(ctx context.Context, db *sql.DB, reg *Registry, guard *sc
 
 // start registers the run for one endpoint with its newest saved config. A non-empty reason means
 // the endpoint was skipped.
-func (s *sequence) start(ctx context.Context, db *sql.DB, reg *Registry, guard *scopeGuard, endpointID string) (startedRun, string) {
+func (s *sequence) start(ctx context.Context, db *sql.DB, reg *Registry, guard *scopeGuard, policy engine.TargetPolicy, endpointID string) (startedRun, string) {
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
 	// A Stop that arrived while waiting for the guard must not start one more run.
@@ -153,7 +154,7 @@ func (s *sequence) start(ctx context.Context, db *sql.DB, reg *Registry, guard *
 	if err != nil {
 		return startedRun{}, err.Error()
 	}
-	started, err := startConfiguredRun(ctx, db, reg, def, resolved, cfg, false)
+	started, err := startConfiguredRun(ctx, db, reg, policy, def, resolved, cfg, false)
 	if err != nil {
 		return startedRun{}, err.Error()
 	}
@@ -204,7 +205,7 @@ func (st *sequenceStore) startOrJoin(collectionID, collectionName string, items 
 	return s, true
 }
 
-func runAllHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *scopeGuard, seqs *sequenceStore) http.HandlerFunc {
+func runAllHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *scopeGuard, seqs *sequenceStore, policy engine.TargetPolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		col, err := store.GetCollection(db, r.PathValue("id"))
 		if errors.Is(err, store.ErrNoSuchCollection) {
@@ -232,7 +233,7 @@ func runAllHandler(db *sql.DB, tmpl *template.Template, reg *Registry, guard *sc
 		ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 		s, created := seqs.startOrJoin(col.ID, col.Name, items, cancel)
 		if created {
-			go s.run(ctx, db, reg, guard)
+			go s.run(ctx, db, reg, guard, policy)
 		} else {
 			cancel()
 		}
