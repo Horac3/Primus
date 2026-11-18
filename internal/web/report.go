@@ -30,21 +30,33 @@ func seriesCSVHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		setAttachment(w, "text/csv; charset=utf-8", run.ID, "csv")
-		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"elapsed_ms", "avg_latency_ms", "rps", "error_rate"})
-		for _, p := range run.TimeSeries {
-			_ = cw.Write([]string{
-				strconv.FormatInt(p.ElapsedMs, 10),
-				strconv.FormatFloat(p.AvgLatencyMs, 'f', -1, 64),
-				strconv.FormatFloat(p.RPS, 'f', -1, 64),
-				strconv.FormatFloat(p.ErrorRate, 'f', -1, 64),
-			})
-		}
-		cw.Flush()
-		if err := cw.Error(); err != nil {
+		if err := WriteSeriesCSV(w, run); err != nil {
 			log.Printf("series csv for run %s: %v", run.ID, err)
 		}
 	}
+}
+
+// WriteSeriesCSV writes the run's time series as elapsed_ms,avg_latency_ms,rps,error_rate rows
+// (FR-REPORT-02). The web download and `primus run --report-dir` share it.
+func WriteSeriesCSV(w io.Writer, run model.Run) error {
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"elapsed_ms", "avg_latency_ms", "rps", "error_rate"})
+	for _, p := range run.TimeSeries {
+		_ = cw.Write([]string{
+			strconv.FormatInt(p.ElapsedMs, 10),
+			strconv.FormatFloat(p.AvgLatencyMs, 'f', -1, 64),
+			strconv.FormatFloat(p.RPS, 'f', -1, 64),
+			strconv.FormatFloat(p.ErrorRate, 'f', -1, 64),
+		})
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+// RunReportMarkdown is the Markdown report of a stored run, the same text GET /runs/{id}/report.md
+// serves (FR-REPORT-03). It carries no URL query, header, body or credential.
+func RunReportMarkdown(db *sql.DB, run model.Run) string {
+	return renderMarkdown(buildReportData(db, run))
 }
 
 // ---- GET /runs/{id}/report.md — markdown summary --------------------------

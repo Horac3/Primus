@@ -188,3 +188,31 @@ Decision: D-017.
   - Edge: only aggregates and normalized URLs are sent; never bodies, headers, credentials or tokens.
 - **FR-INS-03** — Insights may compare against the endpoint's previous runs, using aggregates only (for example "p95 rose from 120 ms to 310 ms").
   - Edge: with one run there is no comparison section.
+
+## Headless CLI for remote servers (CLI)
+- **FR-CLI-01** — `primus import <spec>` imports an OpenAPI 2/3 file or URL into a new collection, like the web
+  import, and prints the collection and endpoints as JSON. Relative paths are saved as `{{base_url}}/path`;
+  `--base-url` sets the collection's base URL and `--name` its name.
+- **FR-CLI-02** — `--default-config <file>` validates one test config and saves it for every imported endpoint
+  (`cfg-<endpoint id>`). An invalid file exits 2 before anything is imported.
+- **FR-CLI-03** — `primus list` prints collections, endpoints (URLs without query or userinfo), each endpoint's newest
+  config ID and latest run (id, start, passed, outcome, p95, error rate) as JSON; `--collection` narrows it.
+- **FR-CLI-04** — `primus run --collection <id or name>` runs every endpoint one after another with its newest saved
+  config, skips endpoints without one, prints per-endpoint results as JSON and exits with the worst result
+  (2 error or nothing ran, 1 failed or no assertions, 0 otherwise).
+- **FR-CLI-05** — `--report-dir` writes each run's JSON output, Markdown report and series CSV (the same content as the
+  web downloads, FR-REPORT-02/03), plus the collection output for a collection run.
+- **FR-CLI-06** — Flags may follow the positional argument (`primus run cfg.json --db x.db` uses `x.db`). A single-config
+  run saves its config so the run shows its endpoint in history and reports. Ctrl-C/SIGTERM stops the run like Stop
+  and the partial run is still saved and printed.
+
+## Protected hosts (GUARD)
+- **FR-GUARD-01** — `PRIMUS_PROTECTED_HOSTS` lists exact hostnames or `*.domain` patterns (domain and subdomains,
+  case-insensitive). `PRIMUS_PROTECTED_MAX_CONCURRENCY` (default 2) and `PRIMUS_PROTECTED_MAX_REQUESTS` (default 50)
+  bound a light run; a value that is not a whole number >= 1 is an error. Unset list = nothing protected.
+- **FR-GUARD-02** — A run whose resolved URL's host is protected starts only if it is light (load mode,
+  `total_requests` <= the request limit, concurrency <= the worker limit, no duration) or its config's
+  `allow_protected_host` equals the host exactly. With hosts configured, a URL with no readable host is refused.
+- **FR-GUARD-03** — The check applies to every start path: web run form, Run all, `primus run` and
+  `primus run --collection`. A refusal starts and saves nothing, answers 400 (web) or exits 2 (CLI), and names the
+  host, the limits and the override. The web form has an override field; the CLI has `--allow-protected-host`.

@@ -1,0 +1,10 @@
+{
+  "name": "primus-testing",
+  "version": "0.1.0",
+  "description": "Skills that plan, run and report API tests with Primus on a remote server: smoke, load, stress, spike/burst, soak, auth and regression.",
+  "author": { "name": "Horac3", "url": "https://github.com/Horac3" },
+  "homepage": "https://github.com/Horac3/Primus",
+  "repository": "https://github.com/Horac3/Primus",
+  "license": "MIT",
+  "keywords": ["api-testing", "load-testing", "performance", "primus"]
+}

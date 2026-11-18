@@ -193,6 +193,15 @@
     </div>
   </details>
 
+  <details style="margin-top:.5rem">
+    <summary>Protected host override</summary>
+    <div class="row" style="margin-top:.5rem">
+      <label><span>Allow this protected host (exact hostname)</span><input type="text" name="allow_protected_host" placeholder="api.example.com" autocomplete="off"></label>
+    </div>
+    <p class="muted" style="margin-top:.35rem">Only needed when the server lists this endpoint's host in
+      <code>PRIMUS_PROTECTED_HOSTS</code> and you mean to load it. See <a href="/docs/safety">safety</a>.</p>
+  </details>
+
   <div style="margin-top:1rem;display:flex;gap:.5rem;align-items:center">
     <button type="submit">▶ Run test</button>
     <span id="run-spinner" class="htmx-indicator muted">running…</span>

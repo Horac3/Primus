@@ -1,14 +1,50 @@
 # CLI (`primus run`)
 
-The headless entrypoint for CI: same engine as the web UI, machine-readable
-output, exit codes a pipeline can gate on. Runs persist to the same SQLite
-DB, so CLI runs show up in the web UI's history.
+The headless entrypoint for CI and remote servers: same engine as the web UI,
+machine-readable output, exit codes a pipeline can gate on. Runs persist to
+the same SQLite DB, so CLI runs show up in the web UI's history.
 
-## Invocation
+Three subcommands share the DB:
 
 ```sh
-primus run <config.json> [--db <path>]
+primus import <spec file or URL> [--name <collection>] [--base-url <url>] [--default-config <config.json>] [--db <path>]
+primus list [--collection <id or name>] [--db <path>]
+primus run <config.json> [--report-dir <dir>] [--allow-protected-host <host>] [--db <path>]
+primus run --collection <id or name> [--report-dir <dir>] [--allow-protected-host <host>] [--db <path>]
 ```
+
+Flags may come before or after the file argument. Together they cover the
+whole loop on a machine with no browser: import an OpenAPI spec, give every
+endpoint a test config, run the collection, and keep the reports.
+
+## `primus import`
+
+Imports an OpenAPI 2 or 3 spec (a file, or an `http(s)` URL fetched with a
+30-second limit) into a **new** collection, exactly like the web UI's import:
+the collection is named after the spec's title (or `--name`), and importing
+twice gives two copies ("Pets", "Pets 2").
+
+- Paths in the spec (`/pets`) are saved as `{{base_url}}/pets`, so the
+  collection's base URL decides the host. Set it with `--base-url`, or later
+  in the Collections panel. Until it is set, runs of those endpoints are
+  refused with a message saying so.
+- `--default-config <file>` saves the same test config for every imported
+  endpoint, so `primus run --collection` can run them straight away. The file
+  is a test config without `id` and `request_id`; Primus fills those in
+  (`cfg-<endpoint id>`). It is validated first: an invalid file exits `2` and
+  imports nothing.
+
+Prints the collection and its endpoints (with `config_id` when a default
+config was saved) as JSON. Exits `0`, or `2` on any error.
+
+## `primus list`
+
+Prints every collection (or just `--collection`) with its endpoints as JSON:
+id, name, method, URL (query string and userinfo removed), the newest saved
+`config_id`, and a short `last_run` (id, start time, passed, outcome, p95,
+error rate). Use it to find the IDs that `primus run` needs.
+
+## `primus run` with one config
 
 - `<config.json>` — a `TestConfig` JSON file (see [load](load.md) for the
   shape). The referenced `request_id` must already be in the DB: import
@@ -35,13 +71,51 @@ primus run <config.json> [--db <path>]
   `achieved_rate` and `dropped`; any drop exits `1` with outcome
   `fail_rate_not_sustained`.
 
+- `--report-dir <dir>` writes `<run id>.json` (the output below),
+  `<run id>.md` (the Markdown report, see [reports](reports.md)) and
+  `<run id>.csv` (the time series) for each run. The directory is created if
+  needed.
+- `--allow-protected-host <host>` fills `allow_protected_host` in configs that
+  leave it empty. See [protected hosts](safety.md).
+- The config is saved to the DB under its `id` before the run, so the run
+  shows its endpoint in the web UI's history and reports.
+- Ctrl-C or `SIGTERM` stops the run the way the Stop button does: requests in
+  flight are counted as cancelled, and the partial run is saved and printed.
+  `kill <pid>` on a long run in `tmux` or `nohup` therefore keeps its results.
+
+## `primus run --collection`
+
+Runs every endpoint of a collection one after another, each with its newest
+saved test config, like **Run all** in the web UI. An endpoint without a saved
+config is listed as `skipped` and the rest still run.
+
+```json
+{
+  "collection": { "id": "col-…", "name": "Pets" },
+  "passed": false,
+  "results": [
+    { "request_id": "col-…-listPets", "name": "listPets", "status": "passed", "run": { "id": "run-…", "…": "…" } },
+    { "request_id": "col-…-createPet", "name": "createPet", "status": "failed", "run": { "…": "…" } },
+    { "request_id": "col-…-deletePet", "name": "deletePet", "status": "skipped", "reason": "no saved test config" }
+  ]
+}
+```
+
+`status` is `passed`, `failed`, `no_assertions`, `skipped` or `error` (the
+run could not start: no base URL, a refused protected host, an invalid saved
+config). The exit code is the worst result: `2` if any endpoint had an
+`error` or no endpoint ran at all, else `1` if any run failed or had no
+assertions, else `0`. Skipped endpoints do not change the code. With
+`--report-dir`, the output is also written to `collection-<timestamp>.json`
+beside each run's reports.
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Run passed all assertions. |
-| `1` | Run completed but an assertion failed (or every request failed). |
-| `2` | Usage/config error: missing file, invalid JSON, failed validation, unknown `request_id`, `{{base_url}}` with no base URL. |
+| `1` | Run completed but an assertion failed (or every request failed, or no assertions were configured). |
+| `2` | Usage/config error: missing file, invalid JSON, failed validation, unknown `request_id` or collection, `{{base_url}}` with no base URL, a heavy run refused by [protected hosts](safety.md). |
 
 ## JSON output (stdout)
 

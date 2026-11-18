@@ -38,11 +38,28 @@ State lives here, not in chat history. `/next` reads "Current step" and "Handoff
 - [x] C3b. (`2e975a0`, `60b0a73`; race.sh green; D-019) SQLite write queue: a single dedicated write connection (readers separate) so Primus's own writers queue instead of poll. Evidence: single writer calls blocked 3.97s to 4.79s in an instrumented `TestDeleteAndClear_SurviveConcurrentWriters`, and `SaveRun` returned `SQLITE_BUSY` once in 200 runs even with pacing (busy handler polls, it does not queue). Provisioning (step 13) already inserts many rows from an async job while the UI polls, which is this load. `inImmediateTx` pins a conn, so audit it first. Cheaper stopgap if needed earlier: bounded retry-with-backoff on `SaveRun` and `CompleteInsight`.
 - [x] C4. (`cc79b1a`..`ff05cb0`) Per-endpoint report with trend table and the key — FR-REP-01, 02
 - [x] C5. (`7926340`..`79edea3`; D-020; race.sh NOT run, Docker down) Richer insights: fixed sections, grounded Ollama output, rules fallback, previous-run comparison — FR-INS-01..03
+- [x] R1. Headless CLI for remote servers: `primus import`, `primus list`, `primus run --collection`, `--report-dir`,
+  flags after the file argument, graceful Ctrl-C/SIGTERM — FR-CLI-01..06
+- [x] R2. Protected hosts guard for every start path — FR-GUARD-01..03, D-021, `docs/safety.md`
+- [x] R3. Claude skills plugin `plugins/primus-testing` (remote runner + one skill per test type Primus supports), with a
+  repo marketplace in `.claude-plugin/marketplace.json`
+- [ ] T1. Response assertions: p99, header and JSON-body checks (equals, exists, type) with per-check results. Unblocks
+  functional testing and richer smoke checks. Write requirements first.
+- [ ] T2. Chained flows: ordered steps with value extraction from one response into the next request (integration
+  testing); makes `login_chained` real. Needs `/decide` on how a flow relates to the one-endpoint `TestConfig`.
+- [ ] T3. Ramp stages (concurrency or rate over time) and abort-on-error-rate, for stress and spike tests.
+- [ ] T4. Baseline gating: fail a run whose p95/error rate is worse than a pinned baseline run by more than a tolerance
+  (regression testing).
+- [ ] T5. Fuzz mode: seeded mutations of the body template and query params; 5xx, stack traces and timeouts become
+  findings. Hostile by nature: always subject to the protected host guard.
+- [ ] T6. Security checks: response-header checks, cross-identity access (BOLA/BFLA) using two credential pools.
+- [ ] T7. Headless global auth (`primus auth set`) so a remote server needs no UI tunnel for auth setup.
 
 ## Current step
-No roadmap step left: C5 was the last one. Next: run `scripts/race.sh` once Docker is up, check C4/C5 UI visually, then ask the user what to plan next.
-Requirements: none
-Status: roadmap complete
+R1-R3 done on branch `feat/primus-testing-kit` (PR pending review). Next: T1 (response assertions), after the user
+approves its requirements. The C4/C5 visual check is still open.
+Requirements: FR-CLI-01..06, FR-GUARD-01..03 (done); T1 requirements not written yet
+Status: R1-R3 in review
 
 ## Handoff notes
 - Done (C5, `7926340`..`79edea3`, docs `616be2e`): `insight.Sections` (numbers, causes, next steps, comparison, fallback marker) saved as JSON in `insights.sections` (idempotent migration); rules analyzer fills it; Ollama keeps its reply shape and maps headline/explanation/next_steps onto it; `Summary.Previous` + `comparisonLines` write the previous-run comparison by code; `store.PreviousRunOfEndpoint`, `CompleteInsightSections`; fragment, report.html and report.md render sections, fallback note and legacy text. Tests: `TestRulesSections_*`, `TestComparison_*`, `TestOllamaSections_*`, `TestOllamaInput_*`, `TestPreviousRunOfEndpoint*`, `TestInsightFragment_*`, `TestReports_*`, `TestInsightSections_LeakNoTokenAndNameOllamaConsistently`. `check.sh all` green; `/review` found nothing blocking and its non-blocking notes are fixed. Docs: `reports.md`, D-020.
@@ -83,3 +100,4 @@ Status: roadmap complete
 - 2026-10-22 step C3b done (`2e975a0`..`60b0a73`)
 - 2026-10-22 step C4 done (`cc79b1a`..`ff05cb0`)
 - 2026-10-22 step C5 done (`7926340`..`79edea3`; race run pending, Docker down)
+- 2026-11-17 steps R1-R3 built (headless CLI, protected hosts, Claude skills plugin); `go test -race` green
